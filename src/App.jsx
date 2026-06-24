@@ -1,12 +1,12 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import POSView from "./components/POSView"
+import POS from "./components/POS"
 
 const App = () => {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<POSView />} />
+        <Route path="/" element={<POS />} />
       </Routes>
     </BrowserRouter>
   );

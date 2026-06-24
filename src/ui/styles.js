@@ -1,0 +1,11 @@
+export const DR = "#8B0000";
+export const DR_LIGHT = "#FFF0F0";
+export const BG = "#FFFFFF";
+export const TEXT = "#111111";
+export const MUTED = "#666666";
+export const BORDER = "#E2E2E2";
+export const SUBTLE = "#F7F7F7";
+export const SUCCESS = "#1A5C32";
+export const SUCCESS_BG = "#ECFDF5";
+export const FONT = '"Segoe UI Historic","Segoe UI",Helvetica,Arial,sans-serif';
+export const inputStyle = { width: "100%", padding: "9px 12px", border: `1px solid ${BORDER}`, borderRadius: 6, fontFamily: FONT, fontSize: 14, boxSizing: "border-box", outline: "none", color: TEXT };
