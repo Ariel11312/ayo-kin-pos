@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../supabase/supabase";
 import { getCategories } from "./data/category"
 import INIT_ITEMS, { getItems } from "./data/items"
 import INIT_ORDERS, { getOrders } from "./data/orders"
@@ -17,6 +19,7 @@ import StatisticsView from "./Views/StatisticsView";
 import StockView from "./Views/StockView";
 
 export default function App() {
+  const navigate = useNavigate();
   const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
   const [config, setConfig] = useState(() => {
     try { return JSON.parse(localStorage.getItem("pos_config") || "{}"); } catch { return {}; }
@@ -52,6 +55,8 @@ export default function App() {
 
   const [showConfig, setShowConfig] = useState(false);
   const [clock, setClock] = useState(new Date());
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => { setDemoMode(!config.supabaseUrl || !config.supabaseKey); }, [config]);
   useEffect(() => { const t = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(t); }, []);
@@ -60,6 +65,14 @@ export default function App() {
     setView(key);
     localStorage.setItem("pos_view", key);
   };
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    await supabase.auth.signOut();
+    setLoggingOut(false);
+    setShowLogoutConfirm(false);
+    navigate("/", { replace: true });
+  }
 
   const navItems = [
     { key: "pos",        emoji: "🧾", label: "Sales / POS"   },
@@ -110,10 +123,25 @@ export default function App() {
         <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
           <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 4 }}>Today's Sales</div>
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>{fmt(todaySales)}</div>
-          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", lineHeight: 1.5, marginBottom: 14 }}>
             {clock.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" }) + " "}
             {clock.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </div>
+          <button
+            onClick={() => setShowLogoutConfirm(true)}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              width: "100%", padding: "9px 0",
+              background: "rgba(255,255,255,0.1)", color: "#fff",
+              border: "1px solid rgba(255,255,255,0.25)", borderRadius: 7,
+              fontFamily: FONT, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+              transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.18)"}
+            onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
+          >
+            <span style={{ fontSize: 14 }}>↪</span> Log out
+          </button>
         </div>
       </div>
 
@@ -141,6 +169,58 @@ export default function App() {
       </div>
 
       {showConfig && <ConfigPanel config={config} setConfig={setConfig} demoMode={demoMode} setDemoMode={setDemoMode} onClose={() => setShowConfig(false)} />}
+
+      {/* ── Logout confirmation ── */}
+      {showLogoutConfirm && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+          }}
+          onClick={() => !loggingOut && setShowLogoutConfirm(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: BG, borderRadius: 12, padding: "28px 28px 22px",
+              width: 340, boxShadow: "0 8px 30px rgba(0,0,0,0.2)",
+              fontFamily: FONT,
+            }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 8 }}>
+              Log out?
+            </div>
+            <div style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.5, marginBottom: 22 }}>
+              Are you sure you want to log out? You'll need to sign in again to access the POS.
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                disabled={loggingOut}
+                style={{
+                  padding: "8px 16px", borderRadius: 7, border: `1px solid ${BORDER}`,
+                  background: BG, color: TEXT, fontFamily: FONT, fontSize: 13, fontWeight: 600,
+                  cursor: loggingOut ? "not-allowed" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleLogout}
+                disabled={loggingOut}
+                style={{
+                  padding: "8px 16px", borderRadius: 7, border: "none",
+                  background: DR, color: "#fff", fontFamily: FONT, fontSize: 13, fontWeight: 700,
+                  cursor: loggingOut ? "not-allowed" : "pointer",
+                  opacity: loggingOut ? 0.75 : 1,
+                }}
+              >
+                {loggingOut ? "Logging out…" : "Log out"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
