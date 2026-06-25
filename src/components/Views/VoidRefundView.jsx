@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { DR, DR_LIGHT, BG, TEXT, MUTED, BORDER, SUBTLE, SUCCESS, SUCCESS_BG, FONT, inputStyle } from "../../ui/styles";
 import Btn from "../../function/btn";
 import fmt from "../../function/fmt";
-import Badge from "../../function/Badge";
+import Badge from "../../function/badge";
 import { ErrBox, OkBox } from "../../function/messageBox";
 
 const APPROVAL_THRESHOLD = 1000;
