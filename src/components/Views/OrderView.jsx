@@ -13,6 +13,10 @@ const DISCOUNT_META = {
 };
 const DISCOUNT_RATE = 0.20; // 20% both types
 
+const ID_NO_MAX_LEN    = 20;
+const NAME_MAX_LEN     = 80;
+const ADDRESS_MAX_LEN  = 150;
+
 const EMPTY_FORM = { type: "", idNo: "", name: "", address: "" };
 
 export default function OrdersView({ orders, setOrders }) {
@@ -177,7 +181,11 @@ export default function OrdersView({ orders, setOrders }) {
       showSuccess("Select a Discount Type", "Please choose PWD or Senior Citizen before saving.");
       return;
     }
-    if (!idNo.trim() || !name.trim()) {
+    const trimmedIdNo    = idNo.trim().slice(0, ID_NO_MAX_LEN);
+    const trimmedName    = name.trim().slice(0, NAME_MAX_LEN);
+    const trimmedAddress = address.trim().slice(0, ADDRESS_MAX_LEN);
+
+    if (!trimmedIdNo || !trimmedName) {
       showSuccess("Missing ID Details", "ID Number and Cardholder Name are required to apply this discount.");
       return;
     }
@@ -186,9 +194,9 @@ export default function OrdersView({ orders, setOrders }) {
     const discountAmt = parseFloat((base * DISCOUNT_RATE).toFixed(2));
     const newTotal     = parseFloat((base - discountAmt).toFixed(2));
     const discount_info = {
-      idNo:    idNo.trim(),
-      name:    name.trim(),
-      address: address.trim(),
+      idNo:    trimmedIdNo,
+      name:    trimmedName,
+      address: trimmedAddress,
     };
 
     try {
@@ -221,10 +229,10 @@ export default function OrdersView({ orders, setOrders }) {
 
   // ── Render ─────────────────────────────────────────────
   return (
-    <div style={{ padding: 22, height: "100%", overflowY: "auto", fontFamily: FONT }}>
+    <div style={{ padding: 22, height: "100vh", boxSizing: "border-box", display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: FONT }}>
 
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, flexShrink: 0 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Orders</h2>
           <p style={{ margin: "4px 0 0", color: MUTED, fontSize: 13 }}>
@@ -236,7 +244,7 @@ export default function OrdersView({ orders, setOrders }) {
       </div>
 
       {/* Summary cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 22, flexShrink: 0 }}>
         {summaries.map(s => (
           <div key={s.label} style={{ background: SUBTLE, borderRadius: 8, padding: "14px 16px" }}>
             <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
@@ -248,7 +256,7 @@ export default function OrdersView({ orders, setOrders }) {
       </div>
 
       {/* Filters */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", flexShrink: 0 }}>
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
@@ -273,169 +281,172 @@ export default function OrdersView({ orders, setOrders }) {
         </div>
       </div>
 
-      {/* Table */}
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ background: SUBTLE }}>
-              {["Order ID", "Time", "Type", "Items", "Total", "Discount", "Payment", "Status", "Actions"].map((h, i) => (
-                <th
-                  key={h}
-                  style={{
-                    padding: "10px 14px",
-                    textAlign: i >= 3 ? "center" : "left",
-                    fontWeight: 700, color: MUTED, fontSize: 10,
-                    textTransform: "uppercase", letterSpacing: 0.8,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((order, idx) => {
-              const dm          = order.discount_type ? DISCOUNT_META[order.discount_type] : null;
-              const rowBg       = idx % 2 === 0 ? BG : "#FAFAFA";
-              const canVoid          = order.status === "completed";
-              const canDiscount      = order.status === "completed" && !order.discount_type;
-              const canEditDiscount  = order.status === "completed" && !!dm;
-              const missingId        = !!dm && !order.discount_info?.idNo;
+      {/* Table — only this region scrolls; header row stays pinned */}
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden", marginBottom:"40px", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: SUBTLE }}>
+                {["Order ID", "Time", "Type", "Items", "Total", "Discount", "Payment", "Status", "Actions"].map((h, i) => (
+                  <th
+                    key={h}
+                    style={{
+                      padding: "10px 14px",
+                      textAlign: i >= 3 ? "center" : "left",
+                      fontWeight: 700, color: MUTED, fontSize: 10,
+                      textTransform: "uppercase", letterSpacing: 0.8,
+                      whiteSpace: "nowrap",
+                      position: "sticky", top: 0, background: SUBTLE, zIndex: 1,
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((order, idx) => {
+                const dm          = order.discount_type ? DISCOUNT_META[order.discount_type] : null;
+                const rowBg       = idx % 2 === 0 ? BG : "#FAFAFA";
+                const canVoid          = order.status === "completed";
+                const canDiscount      = order.status === "completed" && !order.discount_type;
+                const canEditDiscount  = order.status === "completed" && !!dm;
+                const missingId        = !!dm && !order.discount_info?.idNo;
 
-              return (
-                <tr
-                  key={order.id}
-                  onClick={() => setSelectedOrder(order)}
-                  style={{ borderTop: `1px solid ${BORDER}`, cursor: "pointer", background: rowBg }}
-                  onMouseEnter={e => (e.currentTarget.style.background = DR_LIGHT)}
-                  onMouseLeave={e => (e.currentTarget.style.background = rowBg)}
-                >
-                  {/* Order ID */}
-                  <td style={{ padding: "10px 14px", fontWeight: 800, fontFamily: "monospace", fontSize: 12, color: DR }}>
-                    {order.id}
-                  </td>
+                return (
+                  <tr
+                    key={order.id}
+                    onClick={() => setSelectedOrder(order)}
+                    style={{ borderTop: `1px solid ${BORDER}`, cursor: "pointer", background: rowBg }}
+                    onMouseEnter={e => (e.currentTarget.style.background = DR_LIGHT)}
+                    onMouseLeave={e => (e.currentTarget.style.background = rowBg)}
+                  >
+                    {/* Order ID */}
+                    <td style={{ padding: "10px 14px", fontWeight: 800, fontFamily: "monospace", fontSize: 12, color: DR }}>
+                      {order.id}
+                    </td>
 
-                  {/* Time */}
-                  <td style={{ padding: "10px 14px", color: MUTED, whiteSpace: "nowrap" }}>
-                    {new Date(order.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}
-                  </td>
+                    {/* Time */}
+                    <td style={{ padding: "10px 14px", color: MUTED, whiteSpace: "nowrap" }}>
+                      {new Date(order.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}
+                    </td>
 
-                  {/* Type */}
-                  <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{order.type}</td>
+                    {/* Type */}
+                    <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{order.type}</td>
 
-                  {/* Items */}
-                  <td style={{ padding: "10px 14px", textAlign: "center", color: MUTED }}>{order.items.length}</td>
+                    {/* Items */}
+                    <td style={{ padding: "10px 14px", textAlign: "center", color: MUTED }}>{order.items.length}</td>
 
-                  {/* Total — show strikethrough original if discounted */}
-                  <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                    {order.subtotal ? (
-                      <div>
-                        <div style={{ textDecoration: "line-through", color: MUTED, fontSize: 11, lineHeight: 1.3 }}>
-                          {fmt(order.subtotal)}
+                    {/* Total — show strikethrough original if discounted */}
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      {order.subtotal ? (
+                        <div>
+                          <div style={{ textDecoration: "line-through", color: MUTED, fontSize: 11, lineHeight: 1.3 }}>
+                            {fmt(order.subtotal)}
+                          </div>
+                          <div style={{ fontWeight: 800, color: DR }}>{fmt(order.total)}</div>
                         </div>
-                        <div style={{ fontWeight: 800, color: DR }}>{fmt(order.total)}</div>
-                      </div>
-                    ) : (
-                      <span style={{ fontWeight: 800 }}>{fmt(order.total)}</span>
-                    )}
-                  </td>
+                      ) : (
+                        <span style={{ fontWeight: 800 }}>{fmt(order.total)}</span>
+                      )}
+                    </td>
 
-                  {/* Discount badge + ID-on-file status */}
-                  <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                    {dm ? (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-                        <span style={{
-                          display: "inline-flex", alignItems: "center", gap: 4,
-                          padding: "3px 9px", borderRadius: 12,
-                          background: dm.bg, color: dm.color,
-                          fontSize: 10, fontWeight: 800,
-                        }}>
-                          {dm.icon} {dm.label} 20%
-                        </span>
-                        {missingId ? (
-                          <span style={{ fontSize: 9, fontWeight: 800, color: "#DC2626" }}>
-                            ⚠ No ID on file
+                    {/* Discount badge + ID-on-file status */}
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      {dm ? (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", gap: 4,
+                            padding: "3px 9px", borderRadius: 12,
+                            background: dm.bg, color: dm.color,
+                            fontSize: 10, fontWeight: 800,
+                          }}>
+                            {dm.icon} {dm.label} 20%
                           </span>
-                        ) : (
-                          <span style={{ fontSize: 9, color: MUTED, fontFamily: "monospace" }}>
-                            {order.discount_info.idNo}
-                          </span>
+                          {missingId ? (
+                            <span style={{ fontSize: 9, fontWeight: 800, color: "#DC2626" }}>
+                              ⚠ No ID on file
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 9, color: MUTED, fontFamily: "monospace" }}>
+                              {order.discount_info.idNo}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: MUTED, fontSize: 12 }}>—</span>
+                      )}
+                    </td>
+
+                    {/* Payment */}
+                    <td style={{ padding: "10px 14px", textAlign: "center", textTransform: "uppercase", fontSize: 11, fontWeight: 700 }}>
+                      {order.payment_method}
+                    </td>
+
+                    {/* Status */}
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      <Badge status={order.status} />
+                    </td>
+
+                    {/* Actions — stop row-click propagation */}
+                    <td style={{ padding: "8px 14px", textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                      <div style={{ display: "flex", gap: 5, justifyContent: "center", flexWrap: "nowrap" }}>
+                        {canDiscount && (
+                          <button
+                            onClick={() => openDiscountModal(order)}
+                            style={{
+                              padding: "4px 10px", borderRadius: 6,
+                              border: `1px solid #D97706`, cursor: "pointer",
+                              fontFamily: FONT, fontSize: 11, fontWeight: 700,
+                              background: "#FFFBEB", color: "#92400E",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            + Discount
+                          </button>
+                        )}
+                        {canEditDiscount && (
+                          <button
+                            onClick={() => openDiscountModal(order)}
+                            style={{
+                              padding: "4px 10px", borderRadius: 6,
+                              border: `1px solid ${missingId ? "#DC2626" : DISCOUNT_META[order.discount_type].color}`,
+                              cursor: "pointer", fontFamily: FONT, fontSize: 11, fontWeight: 700,
+                              background: missingId ? "#FFF5F5" : DISCOUNT_META[order.discount_type].bg,
+                              color: missingId ? "#DC2626" : DISCOUNT_META[order.discount_type].color,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {missingId ? "🪪 Add ID" : "✏ Edit"}
+                          </button>
+                        )}
+                        {canVoid && (
+                          <button
+                            onClick={() => voidOrder(order)}
+                            style={{
+                              padding: "4px 10px", borderRadius: 6,
+                              border: `1px solid ${DR}`, cursor: "pointer",
+                              fontFamily: FONT, fontSize: 11, fontWeight: 700,
+                              background: "#FFF5F5", color: DR,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Void
+                          </button>
                         )}
                       </div>
-                    ) : (
-                      <span style={{ color: MUTED, fontSize: 12 }}>—</span>
-                    )}
-                  </td>
-
-                  {/* Payment */}
-                  <td style={{ padding: "10px 14px", textAlign: "center", textTransform: "uppercase", fontSize: 11, fontWeight: 700 }}>
-                    {order.payment_method}
-                  </td>
-
-                  {/* Status */}
-                  <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                    <Badge status={order.status} />
-                  </td>
-
-                  {/* Actions — stop row-click propagation */}
-                  <td style={{ padding: "8px 14px", textAlign: "center" }} onClick={e => e.stopPropagation()}>
-                    <div style={{ display: "flex", gap: 5, justifyContent: "center", flexWrap: "nowrap" }}>
-                      {canDiscount && (
-                        <button
-                          onClick={() => openDiscountModal(order)}
-                          style={{
-                            padding: "4px 10px", borderRadius: 6,
-                            border: `1px solid #D97706`, cursor: "pointer",
-                            fontFamily: FONT, fontSize: 11, fontWeight: 700,
-                            background: "#FFFBEB", color: "#92400E",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          + Discount
-                        </button>
-                      )}
-                      {canEditDiscount && (
-                        <button
-                          onClick={() => openDiscountModal(order)}
-                          style={{
-                            padding: "4px 10px", borderRadius: 6,
-                            border: `1px solid ${missingId ? "#DC2626" : DISCOUNT_META[order.discount_type].color}`,
-                            cursor: "pointer", fontFamily: FONT, fontSize: 11, fontWeight: 700,
-                            background: missingId ? "#FFF5F5" : DISCOUNT_META[order.discount_type].bg,
-                            color: missingId ? "#DC2626" : DISCOUNT_META[order.discount_type].color,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {missingId ? "🪪 Add ID" : "✏ Edit"}
-                        </button>
-                      )}
-                      {canVoid && (
-                        <button
-                          onClick={() => voidOrder(order)}
-                          style={{
-                            padding: "4px 10px", borderRadius: 6,
-                            border: `1px solid ${DR}`, cursor: "pointer",
-                            fontFamily: FONT, fontSize: 11, fontWeight: 700,
-                            background: "#FFF5F5", color: DR,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          Void
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {visible.length === 0 && (
-          <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14 }}>
-            No orders found
-          </div>
-        )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {visible.length === 0 && (
+            <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14 }}>
+              No orders found
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Receipt Modal ── */}
@@ -452,17 +463,25 @@ export default function OrdersView({ orders, setOrders }) {
         const idMissingOnLoad = isEditing && !discountModal.discount_info?.idNo;
 
         return (
-          <div style={{
-            position: "fixed", inset: 0,
-            background: "rgba(0,0,0,0.45)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 1000,
-          }}>
-            <div style={{
-              background: BG, borderRadius: 14, padding: 28, width: 420,
-              maxHeight: "90vh", overflowY: "auto",
-              boxShadow: "0 24px 60px rgba(0,0,0,0.18)", fontFamily: FONT,
-            }}>
+          <div
+            onClick={closeDiscountModal}
+            style={{
+              position: "fixed", inset: 0,
+              background: "rgba(0,0,0,0.45)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 24, overflowY: "auto",
+              zIndex: 1000,
+            }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                background: BG, borderRadius: 14, padding: 28, width: 420,
+                maxWidth: "100%", maxHeight: "calc(100vh - 48px)", overflowY: "auto",
+                boxShadow: "0 24px 60px rgba(0,0,0,0.18)", fontFamily: FONT,
+                margin: "auto",
+              }}
+            >
               {/* Header */}
               <div style={{ marginBottom: 16 }}>
                 <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>
@@ -565,24 +584,42 @@ export default function OrdersView({ orders, setOrders }) {
                   Cardholder Details
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <input
-                    value={discountForm.idNo}
-                    onChange={e => setDiscountForm(f => ({ ...f, idNo: e.target.value }))}
-                    placeholder="SC / PWD ID Number *"
-                    style={{ ...inputStyle, width: "100%", fontSize: 13 }}
-                  />
-                  <input
-                    value={discountForm.name}
-                    onChange={e => setDiscountForm(f => ({ ...f, name: e.target.value }))}
-                    placeholder="Cardholder Full Name *"
-                    style={{ ...inputStyle, width: "100%", fontSize: 13 }}
-                  />
-                  <input
-                    value={discountForm.address}
-                    onChange={e => setDiscountForm(f => ({ ...f, address: e.target.value }))}
-                    placeholder="Address (optional)"
-                    style={{ ...inputStyle, width: "100%", fontSize: 13 }}
-                  />
+                  <div>
+                    <input
+                      value={discountForm.idNo}
+                      onChange={e => setDiscountForm(f => ({ ...f, idNo: e.target.value.slice(0, ID_NO_MAX_LEN) }))}
+                      placeholder="SC / PWD ID Number *"
+                      maxLength={ID_NO_MAX_LEN}
+                      style={{ ...inputStyle, width: "100%", fontSize: 13 }}
+                    />
+                    <div style={{ fontSize: 10, color: MUTED, marginTop: 2, textAlign: "right" }}>
+                      {discountForm.idNo.length}/{ID_NO_MAX_LEN}
+                    </div>
+                  </div>
+                  <div>
+                    <input
+                      value={discountForm.name}
+                      onChange={e => setDiscountForm(f => ({ ...f, name: e.target.value.slice(0, NAME_MAX_LEN) }))}
+                      placeholder="Cardholder Full Name *"
+                      maxLength={NAME_MAX_LEN}
+                      style={{ ...inputStyle, width: "100%", fontSize: 13 }}
+                    />
+                    <div style={{ fontSize: 10, color: MUTED, marginTop: 2, textAlign: "right" }}>
+                      {discountForm.name.length}/{NAME_MAX_LEN}
+                    </div>
+                  </div>
+                  <div>
+                    <input
+                      value={discountForm.address}
+                      onChange={e => setDiscountForm(f => ({ ...f, address: e.target.value.slice(0, ADDRESS_MAX_LEN) }))}
+                      placeholder="Address (optional)"
+                      maxLength={ADDRESS_MAX_LEN}
+                      style={{ ...inputStyle, width: "100%", fontSize: 13 }}
+                    />
+                    <div style={{ fontSize: 10, color: MUTED, marginTop: 2, textAlign: "right" }}>
+                      {discountForm.address.length}/{ADDRESS_MAX_LEN}
+                    </div>
+                  </div>
                 </div>
                 <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>* Required before saving</div>
               </div>
