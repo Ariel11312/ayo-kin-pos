@@ -40,6 +40,23 @@ const DISCOUNT_TYPES = [
   { key: "custom", label: "Custom",         rate: null },
 ];
 
+/* ── stock status (mirrors StockView logic) ── */
+const WARNING    = "#B7770D";
+const WARNING_BG = "#FEF3CD";
+const DANGER     = "#C0392B";
+const DANGER_BG  = "#FDECEA";
+
+const getStockStatus = (item) => {
+  if (item.stock == null) return null; // stock not tracked for this item
+  // Coerce to Number: numeric/decimal Postgres columns come back as strings
+  // via supabase-js, and strict equality (===) won't coerce "0" to 0.
+  const stock   = Number(item.stock ?? 0);
+  const reorder = Number(item.reorder ?? 3);
+  if (stock === 0)      return "out";
+  if (stock <= reorder) return "low";
+  return "ok";
+};
+
 /* ─────────────────────────────────────────────
    Discount Info Modal (PWD / Senior Citizen)
 ───────────────────────────────────────────── */
@@ -151,7 +168,7 @@ function DiscountInfoModal({ type, onConfirm, onClose }) {
 /* ─────────────────────────────────────────────
    Main POS View
 ───────────────────────────────────────────── */
-export default function POSView({ categories, items, orders, setOrders, config, demoMode }) {
+export default function POSView({ categories, items, setItems, orders, setOrders, config, demoMode }) {
   const [activeCat, setActiveCat] = useState("all");
 
   // Restore persisted cart state on mount (lazy initializers run once, before first paint)
@@ -169,11 +186,17 @@ export default function POSView({ categories, items, orders, setOrders, config, 
   const [receipt, setReceipt] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState(null);
 
   // Persist cart-related state on every change
   useEffect(() => {
     saveCartState({ cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo });
   }, [cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo]);
+
+  const showToast = (msg, type = "warn") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2600);
+  };
 
   const filtered = items.filter(i => {
     const matchCat = activeCat === "all" || i.category_id === activeCat;
@@ -182,11 +205,25 @@ export default function POSView({ categories, items, orders, setOrders, config, 
   });
 
   const addToCart = (item) => {
+    const status = getStockStatus(item);
+    const currentQtyInCart = cart.find(c => c.id === item.id)?.qty ?? 0;
+
+    if (status === "out") {
+      showToast(`${item.name} is out of stock`, "err");
+      return; // block adding entirely
+    }
+
     setCart(prev => {
       const idx = prev.findIndex(c => c.id === item.id);
       if (idx >= 0) return prev.map((c, i) => i === idx ? { ...c, qty: c.qty + 1 } : c);
       return [...prev, { ...item, qty: 1 }];
     });
+
+    if (item.stock != null && currentQtyInCart + 1 > Number(item.stock)) {
+      showToast(`${item.name}: cart now exceeds available stock (${Number(item.stock)} left)`, "err");
+    } else if (status === "low") {
+      showToast(`${item.name}: only ${Number(item.stock)} left in stock`, "warn");
+    }
   };
 
   const updateQty = (id, delta) =>
@@ -201,6 +238,12 @@ export default function POSView({ categories, items, orders, setOrders, config, 
   })();
 
   const total = subtotal - discAmt;
+
+  // Does any line in the cart exceed currently-known live stock?
+  const hasOverstockedItem = cart.some(c => {
+    const live = items.find(i => i.id === c.id);
+    return live?.stock != null && c.qty > Number(live.stock);
+  });
 
   const clearOrder = () => {
     setCart([]); setOrderType("dine-in"); setTableNo("");
@@ -252,6 +295,29 @@ export default function POSView({ categories, items, orders, setOrders, config, 
       };
       const { error } = await supabase.from("orders").insert(order);
       if (error) throw new Error(error.message);
+
+      // Decrement stock for every item sold. Writing this update to
+      // menu_items is what triggers Supabase Realtime — StockView (and any
+      // other open screen) picks up the new stock automatically.
+      const stockResults = await Promise.all(
+        cart
+          .filter(c => items.find(i => i.id === c.id)?.stock != null) // only tracked items
+          .map(c => {
+            const current = Number(items.find(i => i.id === c.id)?.stock ?? 0);
+            const newStock = Math.max(0, current - c.qty);
+            return supabase.from("menu_items").update({ stock: newStock }).eq("id", c.id);
+          })
+      );
+      const stockErr = stockResults.find(r => r.error);
+      if (stockErr) throw new Error(stockErr.error.message);
+
+      // Reflect the new stock locally so POS UI doesn't wait on a refetch
+      setItems(prev => prev.map(i => {
+        const sold = cart.find(c => c.id === i.id);
+        if (!sold || i.stock == null) return i;
+        return { ...i, stock: Math.max(0, Number(i.stock) - sold.qty) };
+      }));
+
       setOrders(prev => [order, ...prev]);
       setReceipt(order);
       clearOrder();
@@ -284,16 +350,37 @@ export default function POSView({ categories, items, orders, setOrders, config, 
           ))}
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 10, alignContent: "start" }}>
-          {filtered.map(item => (
-            <button key={item.id} onClick={() => addToCart(item)}
-              style={{ background: BG, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "14px 12px", textAlign: "left", cursor: "pointer", fontFamily: FONT }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = DR; e.currentTarget.style.background = DR_LIGHT; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = BG; }}>
-              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, lineHeight: 1.3, color: TEXT }}>{item.name}</div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: DR }}>{fmt(item.price)}</div>
-              <div style={{ fontSize: 10, color: MUTED, marginTop: 5 }}>{categories.find(c => c.id === item.category_id)?.name}</div>
-            </button>
-          ))}
+          {filtered.map(item => {
+            const status = getStockStatus(item);
+            const isOut = status === "out";
+            return (
+              <button key={item.id} onClick={() => addToCart(item)}
+                disabled={isOut}
+                style={{
+                  background: isOut ? SUBTLE : BG,
+                  border: `1px solid ${BORDER}`,
+                  borderRadius: 8, padding: "14px 12px", textAlign: "left",
+                  cursor: isOut ? "not-allowed" : "pointer", fontFamily: FONT,
+                  opacity: isOut ? 0.6 : 1,
+                }}
+                onMouseEnter={e => { if (!isOut) { e.currentTarget.style.borderColor = DR; e.currentTarget.style.background = DR_LIGHT; } }}
+                onMouseLeave={e => { if (!isOut) { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = BG; } }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, lineHeight: 1.3, color: TEXT }}>{item.name}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: DR }}>{fmt(item.price)}</div>
+                <div style={{ fontSize: 10, color: MUTED, marginTop: 5 }}>{categories.find(c => c.id === item.category_id)?.name}</div>
+                {status === "low" && (
+                  <div style={{ fontSize: 10, fontWeight: 700, color: WARNING, background: WARNING_BG, borderRadius: 4, padding: "2px 6px", marginTop: 6, display: "inline-block" }}>
+                    ⚠ {Number(item.stock)} left
+                  </div>
+                )}
+                {status === "out" && (
+                  <div style={{ fontSize: 10, fontWeight: 700, color: DANGER, background: DANGER_BG, borderRadius: 4, padding: "2px 6px", marginTop: 6, display: "inline-block" }}>
+                    Out of stock
+                  </div>
+                )}
+              </button>
+            );
+          })}
           {filtered.length === 0 && (
             <div style={{ gridColumn: "1/-1", textAlign: "center", color: MUTED, padding: 48, fontSize: 14 }}>No items found</div>
           )}
@@ -332,20 +419,32 @@ export default function POSView({ categories, items, orders, setOrders, config, 
               <div style={{ fontSize: 14 }}>Cart is empty</div>
               <div style={{ fontSize: 12, marginTop: 4 }}>Tap any menu item to add</div>
             </div>
-          ) : cart.map(c => (
-            <div key={c.id} style={{ display: "flex", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${BORDER}` }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</div>
-                <div style={{ fontSize: 11, color: MUTED }}>{fmt(c.price)} each</div>
+          ) : cart.map(c => {
+            const liveItem = items.find(i => i.id === c.id); // realtime-updated stock
+            const liveStock = liveItem?.stock != null ? Number(liveItem.stock) : null;
+            const overStock = liveStock != null && c.qty > liveStock;
+            return (
+              <div key={c.id} style={{ display: "flex", flexDirection: "column", padding: "10px 0", borderBottom: `1px solid ${BORDER}` }}>
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.name}</div>
+                    <div style={{ fontSize: 11, color: MUTED }}>{fmt(c.price)} each</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+                    <button onClick={() => updateQty(c.id, -1)} style={{ width: 26, height: 26, borderRadius: 4, border: `1px solid ${BORDER}`, background: SUBTLE, cursor: "pointer", fontWeight: 900, fontSize: 15, lineHeight: 1 }}>−</button>
+                    <span style={{ fontSize: 14, fontWeight: 800, minWidth: 18, textAlign: "center" }}>{c.qty}</span>
+                    <button onClick={() => updateQty(c.id, 1)} style={{ width: 26, height: 26, borderRadius: 4, border: `1px solid ${BORDER}`, background: SUBTLE, cursor: "pointer", fontWeight: 900, fontSize: 15, lineHeight: 1 }}>+</button>
+                  </div>
+                  <div style={{ minWidth: 68, textAlign: "right", fontSize: 13, fontWeight: 800, marginLeft: 6 }}>{fmt(c.price * c.qty)}</div>
+                </div>
+                {overStock && (
+                  <div style={{ fontSize: 11, color: DANGER, fontWeight: 700, marginTop: 4 }}>
+                    ⚠ Only {liveStock} in stock — {c.qty - liveStock} over
+                  </div>
+                )}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
-                <button onClick={() => updateQty(c.id, -1)} style={{ width: 26, height: 26, borderRadius: 4, border: `1px solid ${BORDER}`, background: SUBTLE, cursor: "pointer", fontWeight: 900, fontSize: 15, lineHeight: 1 }}>−</button>
-                <span style={{ fontSize: 14, fontWeight: 800, minWidth: 18, textAlign: "center" }}>{c.qty}</span>
-                <button onClick={() => updateQty(c.id, 1)} style={{ width: 26, height: 26, borderRadius: 4, border: `1px solid ${BORDER}`, background: SUBTLE, cursor: "pointer", fontWeight: 900, fontSize: 15, lineHeight: 1 }}>+</button>
-              </div>
-              <div style={{ minWidth: 68, textAlign: "right", fontSize: 13, fontWeight: 800, marginLeft: 6 }}>{fmt(c.price * c.qty)}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* Totals + action */}
@@ -421,10 +520,19 @@ export default function POSView({ categories, items, orders, setOrders, config, 
             <span style={{ fontSize: 22, fontWeight: 800, color: DR }}>{fmt(total)}</span>
           </div>
 
+          {hasOverstockedItem && (
+            <div style={{
+              background: DANGER_BG, border: `1px solid ${DANGER}`, borderRadius: 8,
+              padding: "8px 10px", marginBottom: 10, fontSize: 12, color: DANGER, fontWeight: 700,
+            }}>
+              ⚠ One or more items exceed available stock. Adjust quantity before charging.
+            </div>
+          )}
+
           <ErrBox msg={error} />
           <div style={{ display: "flex", gap: 8 }}>
             <Btn variant="ghost" onClick={clearOrder} style={{ flexShrink: 0, padding: "9px 14px" }} disabled={cart.length === 0}>Clear</Btn>
-            <Btn onClick={() => { setError(""); setModal("payment"); }} style={{ flex: 1 }} disabled={cart.length === 0 || loading}>
+            <Btn onClick={() => { setError(""); setModal("payment"); }} style={{ flex: 1 }} disabled={cart.length === 0 || loading || hasOverstockedItem}>
               {loading ? "Saving…" : "Pay Now →"}
             </Btn>
           </div>
@@ -445,6 +553,19 @@ export default function POSView({ categories, items, orders, setOrders, config, 
       )}
       {modal === "receipt" && receipt && (
         <ReceiptModal order={receipt} onClose={() => setModal(null)} />
+      )}
+
+      {/* ── Toast ── */}
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 300,
+          background: toast.type === "err" ? DANGER_BG : WARNING_BG,
+          color:      toast.type === "err" ? DANGER    : WARNING,
+          border: `1px solid ${toast.type === "err" ? DANGER : WARNING}`,
+          borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, fontFamily: FONT,
+        }}>
+          {toast.msg}
+        </div>
       )}
     </div>
   );

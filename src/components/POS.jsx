@@ -14,6 +14,7 @@ import MenuView from "./Views/MenuView";
 import OrdersView from "./Views/OrderView";
 import VoidRefundView from "./Views/VoidRefundView";
 import StatisticsView from "./Views/StatisticsView";
+import StockView from "./Views/StockView";
 
 export default function App() {
   const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
@@ -60,12 +61,12 @@ export default function App() {
     localStorage.setItem("pos_view", key);
   };
 
-  // ── FIXED: "stistics" typo corrected to "statistics" ──
   const navItems = [
     { key: "pos",        emoji: "🧾", label: "Sales / POS"   },
     { key: "menu",       emoji: "📋", label: "Menu Setup"    },
     { key: "orders",     emoji: "📦", label: "Orders"        },
-    { key: "statistics", emoji: "📈", label: "Statistics"    }, 
+    { key: "stock",      emoji: "🗃️",  label: "Stock"         },
+    { key: "statistics", emoji: "📈", label: "Statistics"    },
     { key: "voidRefund", emoji: "↩",  label: "Void / Refund" },
   ];
 
@@ -109,7 +110,7 @@ export default function App() {
         <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
           <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 4 }}>Today's Sales</div>
           <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>{fmt(todaySales)}</div>
-           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>
             {clock.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" }) + " "}
             {clock.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
           </div>
@@ -130,11 +131,12 @@ export default function App() {
 
         {/* Content */}
         <div style={{ flex: 1, overflow: "hidden" }}>
-          {view === "pos"        && <POSView       categories={categories} items={items} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
-          {view === "menu"       && <MenuView      categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
-          {view === "orders"     && <OrdersView    orders={orders} />}
+{view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
+          {view === "menu"       && <MenuView       categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
+          {view === "orders"     && <OrdersView     orders={orders} setOrders={setOrders} />}
+          {view === "stock"      && <StockView      items={items} setItems={setItems} demoMode={demoMode} />}
+          {view === "statistics" && <StatisticsView demoMode={demoMode} />}
           {view === "voidRefund" && <VoidRefundView orders={orders} setOrders={setOrders} config={config} demoMode={demoMode} />}
-          {view === "statistics" && <StatisticsView  demoMode={demoMode} />}
         </div>
       </div>
 
