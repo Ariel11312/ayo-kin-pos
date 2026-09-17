@@ -238,7 +238,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
 
   // Restore persisted cart state on mount (lazy initializers run once, before first paint)
   const [cart, setCart]                 = useState(() => loadCartState()?.cart ?? []);
-  const [orderType, setOrderType]       = useState(() => loadCartState()?.orderType ?? "dine-in");
+const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "pickup");
   const [tableNo, setTableNo]           = useState(() => loadCartState()?.tableNo ?? "");
   const [deliveryAddr, setDeliveryAddr] = useState(() => loadCartState()?.deliveryAddr ?? "");
   const [discount, setDiscount]         = useState(() => loadCartState()?.discount ?? "");
@@ -328,12 +328,12 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     return live?.stock != null && c.qty > Number(live.stock);
   });
 
-  const clearOrder = () => {
-    setCart([]); setOrderType("dine-in"); setTableNo("");
-    setDeliveryAddr(""); setDiscount(""); setDiscountType("none");
-    setDiscountInfo(null); setError("");
-    saveCartState(null); // wipe persisted snapshot too
-  };
+const clearOrder = () => {
+  setCart([]); setOrderType("pickup"); setTableNo("");
+  setDeliveryAddr(""); setDiscount(""); setDiscountType("none");
+  setDiscountInfo(null); setError("");
+  saveCartState(null);
+};
 
   /* When a discount button is clicked */
   const handleDiscountSelect = (d) => {
@@ -433,29 +433,24 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     <>
       {/* Order type */}
       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          {["dine-in", "takeout", "delivery"].map(t => (
-            <button key={t} onClick={() => setOrderType(t)}
-              style={{
-                flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
-                cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
-                textTransform: "capitalize", touchAction: "manipulation",
-                background: orderType === t ? DR : SUBTLE, color: orderType === t ? "#fff" : MUTED,
-              }}>
-              {t}
-            </button>
-          ))}
-        </div>
-        {orderType === "dine-in" && (
-          <input value={tableNo} onChange={e => setTableNo(e.target.value)} placeholder="Table number (optional)"
-            inputMode="numeric"
-            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
-        )}
-        {orderType === "delivery" && (
-          <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
-            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
-        )}
-      </div>
+  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+    {["pickup", "drop off", "delivery"].map(t => (
+      <button key={t} onClick={() => setOrderType(t)}
+        style={{
+          flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
+          cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
+          textTransform: "capitalize", touchAction: "manipulation",
+          background: orderType === t ? DR : SUBTLE, color: orderType === t ? "#fff" : MUTED,
+        }}>
+        {t}
+      </button>
+    ))}
+  </div>
+  {orderType === "delivery" && (
+    <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
+      style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+  )}
+</div>
 
       {/* Cart items */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "10px 14px" }}>

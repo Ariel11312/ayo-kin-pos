@@ -19,7 +19,7 @@ import StatisticsView from "./Views/StatisticsView";
 import StockView from "./Views/StockView";
 import EmployeeTimeView from "./Views/EmplyeeTimeView";
 import CalendarView from "./Views/CalendarView";
-
+import ExpensesView from "./Views/ExpensesView";
 export default function App() {
   const navigate = useNavigate();
   const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
@@ -88,25 +88,27 @@ export default function App() {
   }
 
   const navItems = [
-    { key: "pos",        emoji: "🧾", label: "Sales / POS"   },
-    { key: "menu",       emoji: "📋", label: "Menu Setup"    },
-    { key: "orders",     emoji: "📦", label: "Orders"        },
-    { key: "stock",      emoji: "🗃️",  label: "Stock"         },
-    { key: "statistics", emoji: "📈", label: "Statistics"    },
-    { key: "voidRefund", emoji: "↩",  label: "Void / Refund" },
-    { key: "timeClock",  emoji: "🕒", label: "Time Clock"    },
-    { key: "calendar",   emoji: "📅", label: "Calendar"      },
+    { key: "pos", emoji: "🧾", label: "Sales / POS" },
+    { key: "menu", emoji: "📋", label: "Menu Setup" },
+    { key: "orders", emoji: "📦", label: "Orders" },
+    { key: "stock", emoji: "🗃️", label: "Stock" },
+    { key: "expenses", emoji: "💸", label: "expenses" },
+    { key: "statistics", emoji: "📈", label: "Statistics" },
+    { key: "voidRefund", emoji: "↩", label: "Void / Refund" },
+    { key: "timeClock", emoji: "🕒", label: "Time Clock" },
+    { key: "calendar", emoji: "📅", label: "Calendar" },
   ];
 
   const todaySales = orders
     ? orders
-        .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === new Date().toDateString())
-        .reduce((s, o) => s + o.total, 0)
+      .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === new Date().toDateString())
+      .reduce((s, o) => s + o.total, 0)
     : 0;
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
-      <style dangerouslySetInnerHTML={{__html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         body { margin: 0 !important; padding: 0 !important; }
         * { box-sizing: border-box; }
 
@@ -210,10 +212,12 @@ export default function App() {
               const active = view === key;
               return (
                 <button key={key} onClick={() => handleSetView(key)}
-                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "13px 18px",
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "13px 18px",
                     background: active ? "rgba(255,255,255,0.18)" : "transparent", color: "#fff", border: "none", cursor: "pointer",
                     fontFamily: FONT, fontSize: 13, fontWeight: active ? 800 : 400,
-                    borderLeft: active ? "3px solid rgba(255,255,255,0.9)" : "3px solid transparent" }}>
+                    borderLeft: active ? "3px solid rgba(255,255,255,0.9)" : "3px solid transparent"
+                  }}>
                   <span style={{ fontSize: 16 }}>{emoji}</span> {label}
                 </button>
               );
@@ -265,13 +269,15 @@ export default function App() {
           {/* Content */}
           <div className="content-area" style={{ flex: 1, overflow: "hidden" }}>
             {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
-            {view === "menu"       && <MenuView       categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
-            {view === "orders"     && <OrdersView     orders={orders} setOrders={setOrders} />}
-            {view === "stock"      && <StockView      items={items} setItems={setItems} demoMode={demoMode} />}
+            {view === "menu" && <MenuView categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
+            {view === "orders" && <OrdersView orders={orders} setOrders={setOrders} />}
+            {view === "stock" && <StockView items={items} setItems={setItems} demoMode={demoMode} />}
             {view === "statistics" && <StatisticsView demoMode={demoMode} />}
             {view === "voidRefund" && <VoidRefundView orders={orders} setOrders={setOrders} config={config} demoMode={demoMode} />}
-            {view === "timeClock"  && <EmployeeTimeView demoMode={demoMode} />}
-            {view === "calendar"   && <CalendarView    demoMode={demoMode} />}
+            {view === "timeClock" && <EmployeeTimeView demoMode={demoMode} />}
+            {view === "calendar" && <CalendarView demoMode={demoMode} />}
+            {view === "expenses" && <ExpensesView demoMode={demoMode} />}
+
           </div>
         </div>
       </div>
