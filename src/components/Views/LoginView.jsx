@@ -3,7 +3,7 @@ import { supabase } from "../../supabase/supabase";
 import { useNavigate } from "react-router-dom";
 
 // — styles.js tokens (inline for portability) —
-const DR       = "#8B0000";
+const DR       = "#247494";
 const DR_LIGHT = "#FFF0F0";
 const BG       = "#FFFFFF";
 const TEXT     = "#111111";
@@ -15,11 +15,11 @@ const FONT     = '"Segoe UI Historic","Segoe UI",Helvetica,Arial,sans-serif';
 
 const inputStyle = {
   width: "100%",
-  padding: "9px 12px",
+  padding: "11px 12px",
   border: `1px solid ${BORDER}`,
   borderRadius: 6,
   fontFamily: FONT,
-  fontSize: 14,
+  fontSize: 16, // 16px keeps iOS from zooming when the field is focused
   boxSizing: "border-box",
   outline: "none",
   color: TEXT,
@@ -27,7 +27,30 @@ const inputStyle = {
   transition: "border-color 0.15s",
 };
 
+// Tiny matchMedia hook so inline styles can respond to viewport size.
+function useIsMobile(query = "(max-width: 820px)") {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia(query).matches;
+  });
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia(query);
+    const onChange = (e) => setMatches(e.matches);
+    setMatches(mql.matches);
+    if (mql.addEventListener) mql.addEventListener("change", onChange);
+    else mql.addListener(onChange);
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener("change", onChange);
+      else mql.removeListener(onChange);
+    };
+  }, [query]);
+  return matches;
+}
+
 export default function LoginView() {
+  const isMobile = useIsMobile();
+
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [error, setError]       = useState("");
@@ -78,13 +101,31 @@ export default function LoginView() {
   }
 
   return (
-    <div style={styles.root}>
-      <style dangerouslySetInnerHTML={{ __html: `body { margin: 0 !important; padding: 0 !important; }` }} />
+    <div className="login-root" style={{
+      ...styles.root,
+      flexDirection: isMobile ? "column" : "row",
+    }}>
+      <style dangerouslySetInnerHTML={{ __html: `
+        body { margin: 0 !important; padding: 0 !important; }
+        .login-root { min-height: 100vh; min-height: 100dvh; }
+        .login-submit:hover:not(:disabled) { background: #6d0000; }
+        .login-submit:focus-visible,
+        .login-root input:focus-visible { outline: 2px solid ${DR}; outline-offset: 2px; }
+      `}} />
 
-      {/* Left panel — brand */}
-      <div style={styles.brand}>
-        <div style={styles.brandInner}>
-          <div style={styles.logoMark}>
+      {/* Brand panel — full-width banner on phones, side panel on desktop */}
+      <div style={{
+        ...styles.brand,
+        width: isMobile ? "100%" : "42%",
+        minHeight: isMobile ? "auto" : undefined,
+      }}>
+        <div style={{
+          ...styles.brandInner,
+          padding: isMobile ? "28px 22px 26px" : "48px 40px",
+          maxWidth: isMobile ? 520 : 340,
+          width: "100%",
+        }}>
+          <div style={{ marginBottom: isMobile ? 16 : 24 }}>
             <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
               <rect width="36" height="36" rx="8" fill={DR} />
               <path d="M10 26V14l8-4 8 4v12l-8 4-8-4Z" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round"/>
@@ -92,16 +133,30 @@ export default function LoginView() {
             </svg>
           </div>
 
-          <h1 style={styles.brandName}>Ayo-Kin POS</h1>
-          <p style={styles.brandTagline}>
-            Fast, reliable point-of-sale<br />for every transaction.
+          <h1 style={{
+            ...styles.brandName,
+            fontSize: isMobile ? 22 : 28,
+          }}>
+            Bula-On Laundry Hub POS
+          </h1>
+          <p style={{
+            ...styles.brandTagline,
+            fontSize: isMobile ? 14 : 15,
+            margin: isMobile ? "0 0 20px" : "0 0 36px",
+          }}>
+            Fast, reliable point-of-sale for every transaction.
           </p>
 
-          <div style={styles.featureList}>
-            {["Live inventory tracking", "Sales analytics", "Void &amp; refund management"].map((f) => (
+          <div style={{
+            ...styles.featureList,
+            flexDirection: isMobile ? "row" : "column",
+            flexWrap: isMobile ? "wrap" : "nowrap",
+            gap: isMobile ? "8px 16px" : 12,
+          }}>
+            {["Live inventory tracking", "Sales analytics", "Void & refund management"].map((f) => (
               <div key={f} style={styles.featureItem}>
                 <span style={styles.featureDot} />
-                <span dangerouslySetInnerHTML={{ __html: f }} />
+                <span>{f}</span>
               </div>
             ))}
           </div>
@@ -111,12 +166,20 @@ export default function LoginView() {
         <div style={styles.gridOverlay} aria-hidden />
       </div>
 
-      {/* Right panel — login form */}
-      <div style={styles.formPanel}>
-        <div style={styles.formCard}>
+      {/* Form panel */}
+      <div style={{
+        ...styles.formPanel,
+        padding: isMobile ? "28px 18px 36px" : "48px 32px",
+      }}>
+        <div style={{
+          ...styles.formCard,
+          padding: isMobile ? "26px 20px" : "36px 32px",
+          border: isMobile ? "none" : `1px solid ${BORDER}`,
+          boxShadow: isMobile ? "0 1px 3px rgba(0,0,0,0.05)" : "0 1px 4px rgba(0,0,0,0.06)",
+        }}>
           <p style={styles.formEyebrow}>Staff access</p>
-          <h2 style={styles.formHeading}>Sign in to your account</h2>
-          <p style={styles.formSub}>Enter your credentials to continue.</p>
+          <h2 style={{ ...styles.formHeading, fontSize: isMobile ? 20 : 22 }}>Sign in to your account</h2>
+          <p style={{ ...styles.formSub, margin: isMobile ? "0 0 22px" : "0 0 28px" }}>Enter your credentials to continue.</p>
 
           <form onSubmit={handleLogin} noValidate>
             <div style={styles.fieldGroup}>
@@ -124,7 +187,10 @@ export default function LoginView() {
               <input
                 id="email"
                 type="email"
+                inputMode="email"
                 autoComplete="email"
+                autoCapitalize="none"
+                autoCorrect="off"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -161,7 +227,7 @@ export default function LoginView() {
 
             {error && (
               <div style={styles.errorBox} role="alert">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0, marginTop: 1 }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ flexShrink: 0, marginTop: 3 }}>
                   <circle cx="7" cy="7" r="6" stroke={DR} strokeWidth="1.4" />
                   <path d="M7 4v3.5M7 10h.01" stroke={DR} strokeWidth="1.4" strokeLinecap="round" />
                 </svg>
@@ -170,6 +236,7 @@ export default function LoginView() {
             )}
 
             <button
+              className="login-submit"
               type="submit"
               disabled={loading}
               style={{
@@ -188,7 +255,7 @@ export default function LoginView() {
         </div>
 
         <p style={styles.footer}>
-          © {new Date().getFullYear()} Ayo-Kin POS · All rights reserved
+          © {new Date().getFullYear()} Bula-On Laundry Hub POS · All rights reserved
         </p>
       </div>
     </div>
@@ -198,15 +265,13 @@ export default function LoginView() {
 const styles = {
   root: {
     display: "flex",
-    minHeight: "100vh",
     fontFamily: FONT,
     background: BG,
   },
 
-  // ── left brand panel ──────────────────────────────────────────
+  // ── brand panel ───────────────────────────────────────────────
   brand: {
     position: "relative",
-    width: "42%",
     background: DR,
     display: "flex",
     alignItems: "center",
@@ -217,30 +282,22 @@ const styles = {
   brandInner: {
     position: "relative",
     zIndex: 1,
-    padding: "48px 40px",
     color: "#fff",
-    maxWidth: 340,
-  },
-  logoMark: {
-    marginBottom: 24,
+    boxSizing: "border-box",
   },
   brandName: {
     margin: "0 0 10px",
-    fontSize: 28,
     fontWeight: 700,
     letterSpacing: "-0.5px",
     color: "#fff",
+    lineHeight: 1.2,
   },
   brandTagline: {
-    margin: "0 0 36px",
-    fontSize: 15,
     lineHeight: 1.6,
     color: "rgba(255,255,255,0.75)",
   },
   featureList: {
     display: "flex",
-    flexDirection: "column",
-    gap: 12,
   },
   featureItem: {
     display: "flex",
@@ -265,24 +322,22 @@ const styles = {
     pointerEvents: "none",
   },
 
-  // ── right form panel ──────────────────────────────────────────
+  // ── form panel ────────────────────────────────────────────────
   formPanel: {
     flex: 1,
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    padding: "48px 32px",
     background: SUBTLE,
+    boxSizing: "border-box",
   },
   formCard: {
     width: "100%",
     maxWidth: 400,
     background: BG,
     borderRadius: 12,
-    border: `1px solid ${BORDER}`,
-    padding: "36px 32px",
-    boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+    boxSizing: "border-box",
   },
   formEyebrow: {
     margin: "0 0 8px",
@@ -294,13 +349,12 @@ const styles = {
   },
   formHeading: {
     margin: "0 0 6px",
-    fontSize: 22,
     fontWeight: 700,
     color: TEXT,
     letterSpacing: "-0.3px",
+    lineHeight: 1.25,
   },
   formSub: {
-    margin: "0 0 28px",
     fontSize: 13,
     color: MUTED,
   },
@@ -330,13 +384,14 @@ const styles = {
   submitBtn: {
     marginTop: 22,
     width: "100%",
-    padding: "10px 0",
+    minHeight: 46,
+    padding: "12px 0",
     background: DR,
     color: "#fff",
     border: "none",
     borderRadius: 7,
     fontFamily: FONT,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: 600,
     letterSpacing: "0.01em",
     transition: "background 0.15s",
@@ -352,5 +407,6 @@ const styles = {
     fontSize: 11,
     color: MUTED,
     textAlign: "center",
+    padding: "0 12px",
   },
 };

@@ -4,6 +4,7 @@ import {
   DR, BG, TEXT, MUTED, BORDER, SUBTLE, SUCCESS, SUCCESS_BG, FONT
 } from "../../ui/styles";
 import fmt from "../../function/fmt";
+import useIsMobile, { noZoomFont, SAFE_BOTTOM } from "../../function/useIsMobile";
 
 /* ─── palette ─── */
 const DANGER    = "#C0392B";
@@ -13,34 +14,6 @@ const WARNING_BG= "#FEF3CD";
 const INFO      = "#185FA5";
 const INFO_BG   = "#E8F1FB";
 const CARD_BG   = "#F7F7F7";
-
-/* ─── shared styles ─── */
-const ghostBtn = {
-  background: "none", border: `1px solid ${BORDER}`, borderRadius: 6,
-  padding: "4px 10px", cursor: "pointer", fontFamily: FONT, fontSize: 12, color: MUTED,
-};
-const primaryBtn = {
-  background: DR, color: "#fff", border: "none", borderRadius: 6,
-  padding: "8px 18px", cursor: "pointer", fontFamily: FONT, fontSize: 13, fontWeight: 700,
-};
-const inputStyle = {
-  width: "100%", padding: "8px 11px", border: `1px solid ${BORDER}`, borderRadius: 6,
-  fontFamily: FONT, fontSize: 13, color: TEXT, background: "#fff", boxSizing: "border-box",
-};
-const labelStyle = { fontSize: 12, color: MUTED, display: "block", marginBottom: 4, fontWeight: 600 };
-const rowStyle   = { marginBottom: 14 };
-
-const thStyle = {
-  fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left",
-  padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`,
-  position: "sticky", top: 0, background: BG, zIndex: 1,
-};
-const tdStyle = { padding: "10px 8px", borderBottom: `1px solid ${BORDER}` };
-const qtyBtn  = {
-  width: 24, height: 24, borderRadius: 6, border: `1px solid ${BORDER}`,
-  background: "#fff", cursor: "pointer", fontFamily: FONT, fontSize: 16,
-  display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, color: TEXT,
-};
 
 const REORDER_REASONS = [
   "Delivery received",
@@ -86,23 +59,49 @@ function StockBar({ item }) {
   );
 }
 
-function StatCard({ label, value, sub, valueColor }) {
+function StatCard({ label, value, sub, valueColor, isMobile }) {
   return (
-    <div style={{ background: CARD_BG, borderRadius: 8, padding: "12px 16px", flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 11, color: MUTED, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: valueColor || TEXT }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{sub}</div>}
+    <div style={{ background: CARD_BG, borderRadius: 8, padding: isMobile ? "10px 12px" : "12px 16px", flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 10, color: MUTED, marginBottom: 4, fontWeight: 600, letterSpacing: 0.4 }}>{label}</div>
+      <div style={{ fontSize: isMobile ? 18 : 22, fontWeight: 800, color: valueColor || TEXT }}>{value}</div>
+      {sub && !isMobile && <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
 
-function ModalShell({ title, onClose, children }) {
+function ModalShell({ title, onClose, children, isMobile }) {
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.40)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, border: `1px solid ${BORDER}`, padding: 24, width: 380, maxHeight: "85vh", overflowY: "auto", fontFamily: FONT }}>
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.40)",
+      display: "flex",
+      alignItems: isMobile ? "flex-end" : "center",
+      justifyContent: "center",
+      zIndex: 200, padding: isMobile ? 0 : 16,
+      overscrollBehavior: "contain",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff",
+        borderRadius: isMobile ? "16px 16px 0 0" : 12,
+        border: isMobile ? "none" : `1px solid ${BORDER}`,
+        padding: isMobile ? "18px 16px" : 24,
+        paddingBottom: isMobile ? `calc(18px + ${SAFE_BOTTOM})` : 24,
+        width: isMobile ? "100%" : 380,
+        maxWidth: "100%",
+        maxHeight: isMobile ? "92dvh" : "85vh",
+        overflowY: "auto", WebkitOverflowScrolling: "touch",
+        fontFamily: FONT, boxSizing: "border-box",
+      }}>
+        {isMobile && (
+          <div style={{ width: 38, height: 4, borderRadius: 2, background: BORDER, margin: "0 auto 14px" }} />
+        )}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
           <span style={{ fontSize: 15, fontWeight: 800, color: TEXT }}>{title}</span>
-          <button onClick={onClose} style={ghostBtn}>✕</button>
+          {!isMobile && (
+            <button onClick={onClose} style={{
+              background: "none", border: `1px solid ${BORDER}`, borderRadius: 6,
+              padding: "4px 10px", cursor: "pointer", fontFamily: FONT, fontSize: 12, color: MUTED,
+            }}>✕</button>
+          )}
         </div>
         {children}
       </div>
@@ -114,6 +113,7 @@ function ModalShell({ title, onClose, children }) {
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════ */
 export default function StockView({ demoMode }) {
+  const isMobile = useIsMobile();
 
   /* ── data state ── */
   const [items,   setItems]   = useState([]);
@@ -143,6 +143,31 @@ export default function StockView({ demoMode }) {
 
   const channelRef = useRef(null);
 
+  /* ── shared styles that depend on breakpoint ── */
+  const ghostBtn = {
+    background: "none", border: `1px solid ${BORDER}`, borderRadius: 6,
+    padding: isMobile ? "8px 14px" : "4px 10px", cursor: "pointer",
+    fontFamily: FONT, fontSize: 12, color: MUTED, touchAction: "manipulation",
+  };
+  const primaryBtn = {
+    background: DR, color: "#fff", border: "none", borderRadius: 6,
+    padding: isMobile ? "11px 18px" : "8px 18px", cursor: "pointer",
+    fontFamily: FONT, fontSize: 13, fontWeight: 700, touchAction: "manipulation",
+  };
+  const inputStyle = {
+    width: "100%", padding: isMobile ? "10px 12px" : "8px 11px",
+    border: `1px solid ${BORDER}`, borderRadius: 6,
+    fontFamily: FONT, fontSize: noZoomFont(isMobile), color: TEXT, background: "#fff", boxSizing: "border-box",
+  };
+  const labelStyle = { fontSize: 12, color: MUTED, display: "block", marginBottom: 4, fontWeight: 600 };
+  const rowStyle   = { marginBottom: 14 };
+  const qtyBtn  = {
+    width: isMobile ? 34 : 24, height: isMobile ? 34 : 24, borderRadius: 6, border: `1px solid ${BORDER}`,
+    background: "#fff", cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 18 : 16,
+    display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, color: TEXT,
+    touchAction: "manipulation", flexShrink: 0,
+  };
+
   /* ══ initial fetch + real-time ══ */
   useEffect(() => {
     fetchItems();
@@ -151,6 +176,15 @@ export default function StockView({ demoMode }) {
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
   }, []);
+
+  // Lock background scroll on mobile while any modal is open.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const lock = isMobile && modal !== null;
+    const prev = document.body.style.overflow;
+    if (lock) document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [isMobile, modal]);
 
   async function fetchItems() {
     setLoading(true);
@@ -311,7 +345,7 @@ export default function StockView({ demoMode }) {
   );
 
   if (error) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontFamily: FONT, flexDirection: "column", gap: 12 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontFamily: FONT, flexDirection: "column", gap: 12, padding: 20, textAlign: "center" }}>
       <div style={{ fontSize: 15, fontWeight: 700, color: DANGER }}>Failed to load stock data</div>
       <div style={{ fontSize: 12, color: MUTED }}>{error}</div>
       <button onClick={fetchItems} style={primaryBtn}>Retry</button>
@@ -319,116 +353,202 @@ export default function StockView({ demoMode }) {
   );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", fontFamily: FONT, background: BG, overflow: "hidden" }}>
+    <div style={{
+      display: "flex", flexDirection: "column",
+      height: isMobile ? "100dvh" : "100%",
+      fontFamily: FONT, background: BG, overflow: "hidden",
+    }}>
 
-      {/* stat bar */}
-      <div style={{ display: "flex", gap: 10, padding: "14px 20px 10px", flexShrink: 0 }}>
-        <StatCard label="Total SKUs"      value={totalItems}    sub={`${totalItems - outCount - lowCount} healthy`} />
-        <StatCard label="Out of stock"    value={outCount}      sub="need restocking"    valueColor={outCount > 0 ? DANGER  : TEXT} />
-        <StatCard label="Low stock"       value={lowCount}      sub="at / below reorder" valueColor={lowCount > 0 ? WARNING : TEXT} />
-        <StatCard label="Inventory value" value={fmt(invValue)} sub="at sell price" />
+      {/* stat bar — 2×2 on phones */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
+        gap: 10, padding: isMobile ? "12px 14px 8px" : "14px 20px 10px", flexShrink: 0,
+      }}>
+        <StatCard isMobile={isMobile} label="Total SKUs"      value={totalItems}    sub={`${totalItems - outCount - lowCount} healthy`} />
+        <StatCard isMobile={isMobile} label="Out of stock"    value={outCount}      sub="need restocking"    valueColor={outCount > 0 ? DANGER  : TEXT} />
+        <StatCard isMobile={isMobile} label="Low stock"       value={lowCount}      sub="at / below reorder" valueColor={lowCount > 0 ? WARNING : TEXT} />
+        <StatCard isMobile={isMobile} label="Inventory value" value={fmt(invValue)} sub="at sell price" />
       </div>
 
       {/* toolbar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 20px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0, flexWrap: "wrap" }}>
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items…" style={{ ...inputStyle, width: 200 }} />
-        {[["all","All"],["low","Low stock"],["out","Out of stock"]].map(([k, label]) => (
-          <button key={k} onClick={() => setFilter(k)} style={{
-            ...ghostBtn, borderRadius: 20,
-            background: filter === k ? DR : "transparent",
-            color:      filter === k ? "#fff" : MUTED,
-            border:     `1px solid ${filter === k ? DR : BORDER}`,
-            fontWeight: filter === k ? 700 : 400,
-          }}>{label}</button>
-        ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: SUCCESS, marginLeft: 4 }}>
-          <span style={{ width: 7, height: 7, borderRadius: "50%", background: SUCCESS, display: "inline-block" }} />
-          Live
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10,
+        padding: isMobile ? "8px 14px" : "8px 20px",
+        borderBottom: `1px solid ${BORDER}`, flexShrink: 0, flexWrap: "wrap",
+      }}>
+        <input
+          value={search} onChange={e => setSearch(e.target.value)} placeholder="Search items…"
+          type="search" autoCorrect="off"
+          style={{ ...inputStyle, width: isMobile ? "100%" : 200 }}
+        />
+        <div style={{
+          display: "flex", gap: 6,
+          overflowX: isMobile ? "auto" : "visible",
+          WebkitOverflowScrolling: "touch", scrollbarWidth: "none",
+          flex: isMobile ? "1 1 100%" : "0 0 auto",
+        }}>
+          {[["all","All"],["low","Low stock"],["out","Out of stock"]].map(([k, label]) => (
+            <button key={k} onClick={() => setFilter(k)} style={{
+              ...ghostBtn, borderRadius: 20, whiteSpace: "nowrap", flexShrink: 0,
+              background: filter === k ? DR : "transparent",
+              color:      filter === k ? "#fff" : MUTED,
+              border:     `1px solid ${filter === k ? DR : BORDER}`,
+              fontWeight: filter === k ? 700 : 400,
+            }}>{label}</button>
+          ))}
+          {!isMobile && (
+            <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: SUCCESS, marginLeft: 4 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: SUCCESS, display: "inline-block" }} />
+              Live
+            </div>
+          )}
         </div>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => setModal("log")} style={ghostBtn}>📋 Activity log</button>
-        <button onClick={openRestock} style={primaryBtn}>+ Restock</button>
+        {!isMobile && <div style={{ flex: 1 }} />}
+        <div style={{ display: "flex", gap: 8, flex: isMobile ? "1 1 100%" : "0 0 auto" }}>
+          <button onClick={() => setModal("log")} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined }}>📋 Activity log</button>
+          <button onClick={openRestock} style={{ ...primaryBtn, flex: isMobile ? 1 : undefined }}>+ Restock</button>
+        </div>
       </div>
 
-      {/* table */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
-          <colgroup>
-            <col style={{ width: "18%" }} /><col style={{ width: "10%" }} /><col style={{ width: "9%" }} />
-            <col style={{ width: "17%" }} /><col style={{ width: "12%" }} /><col style={{ width: "10%" }} />
-            <col style={{ width: "13%" }} /><col style={{ width: "11%" }} />
-          </colgroup>
-          <thead>
-            <tr>
-              <th style={thStyle}>{colHeader("name", "Item")}</th>
-              <th style={thStyle}>{colHeader("category_id", "Category")}</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>{colHeader("price", "Price")}</th>
-              <th style={thStyle}>Qty</th>
-              <th style={thStyle}>{colHeader("stock", "Status")}</th>
-              <th style={thStyle}>{colHeader("reorder", "Reorder at")}</th>
-              <th style={thStyle}>Available</th>
-              <th style={{ ...thStyle, textAlign: "right" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 && (
-              <tr><td colSpan={8} style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 13 }}>No items match your search or filter.</td></tr>
-            )}
+      {/* ── Items: card list on mobile, table on desktop ── */}
+      {isMobile ? (
+        <div style={{ flex: 1, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: `10px 14px calc(20px + ${SAFE_BOTTOM})` }}>
+          {rows.length === 0 && (
+            <div style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 13 }}>No items match your search or filter.</div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {rows.map(item => {
               const s = getStatus(item);
-              const leftBorder = s === "out" ? DANGER : s === "low" ? WARNING : "transparent";
+              const leftBorder = s === "out" ? DANGER : s === "low" ? WARNING : BORDER;
               return (
-                <tr key={item.id}>
-                  <td style={{ ...tdStyle, borderLeft: `3px solid ${leftBorder}` }}>
-                    <div style={{ fontWeight: 700, color: TEXT }}>{item.name}</div>
-                    <div style={{ fontSize: 11, color: MUTED, marginTop: 1 }}>ID: {item.id}</div>
-                  </td>
-                  <td style={tdStyle}>
-                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: SUBTLE, color: MUTED }}>
-                      {item.category_id || "—"}
-                    </span>
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: TEXT }}>{fmt(item.price ?? 0)}</td>
-                  <td style={tdStyle}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
-                      <span style={{ minWidth: 28, textAlign: "center", fontWeight: 800, fontSize: 14, color: TEXT }}>{item.stock ?? 0}</span>
-                      <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
+                <div key={item.id} style={{
+                  background: "#fff", borderRadius: 10, padding: 14,
+                  borderLeft: `4px solid ${leftBorder}`, border: `1px solid ${BORDER}`, borderLeftWidth: 4,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, color: TEXT, fontSize: 14, wordBreak: "break-word" }}>{item.name}</div>
+                      <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
+                        <span style={{ padding: "2px 8px", borderRadius: 20, background: SUBTLE }}>{item.category_id || "—"}</span>
+                        {"  ·  "}{fmt(item.price ?? 0)}
+                      </div>
                     </div>
-                    <StockBar item={item} />
-                  </td>
-                  <td style={tdStyle}><StatusBadge item={item} /></td>
-                  <td style={{ ...tdStyle, color: MUTED, fontWeight: 600 }}>{item.reorder ?? 3} units</td>
-                  <td style={tdStyle}>
-                    <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
-                      <span style={{ position: "relative", display: "inline-block", width: 34, height: 20, flexShrink: 0 }}>
-                        <input type="checkbox" checked={item.available ?? true} onChange={() => toggleAvail(item)}
-                          style={{ opacity: 0, width: 0, height: 0, position: "absolute" }} />
-                        <span style={{ position: "absolute", inset: 0, borderRadius: 20, background: item.available ? DR : BORDER, transition: "background .2s" }} />
-                        <span style={{ position: "absolute", top: 3, left: item.available ? 16 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s" }} />
-                      </span>
-                      <span style={{ fontSize: 12, color: item.available ? SUCCESS : MUTED, fontWeight: 600 }}>{item.available ? "On" : "Off"}</span>
-                    </label>
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>
+                    <StatusBadge item={item} />
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+                    <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
+                    <span style={{ minWidth: 32, textAlign: "center", fontWeight: 800, fontSize: 16, color: TEXT }}>{item.stock ?? 0}</span>
+                    <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
+                    <span style={{ fontSize: 11, color: MUTED, marginLeft: 4 }}>reorder @ {item.reorder ?? 3}</span>
+                    <div style={{ flex: 1 }} />
                     <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
-                  </td>
-                </tr>
+                  </div>
+                  <StockBar item={item} />
+
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 12 }}>
+                    <span style={{ position: "relative", display: "inline-block", width: 38, height: 22, flexShrink: 0 }}>
+                      <input type="checkbox" checked={item.available ?? true} onChange={() => toggleAvail(item)}
+                        style={{ opacity: 0, width: 0, height: 0, position: "absolute" }} />
+                      <span style={{ position: "absolute", inset: 0, borderRadius: 20, background: item.available ? DR : BORDER, transition: "background .2s" }} />
+                      <span style={{ position: "absolute", top: 3, left: item.available ? 18 : 3, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left .2s" }} />
+                    </span>
+                    <span style={{ fontSize: 12, color: item.available ? SUCCESS : MUTED, fontWeight: 600 }}>
+                      {item.available ? "Available" : "Hidden"}
+                    </span>
+                  </label>
+                </div>
               );
             })}
-          </tbody>
-        </table>
-        {rows.length > 0 && (
-          <div style={{ fontSize: 11, color: MUTED, padding: "10px 0", textAlign: "right" }}>
-            Showing {rows.length} of {items.length} items · updates live
           </div>
-        )}
-      </div>
+          {rows.length > 0 && (
+            <div style={{ fontSize: 11, color: MUTED, padding: "12px 2px 0", textAlign: "center" }}>
+              Showing {rows.length} of {items.length} items · updates live
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+            <colgroup>
+              <col style={{ width: "18%" }} /><col style={{ width: "10%" }} /><col style={{ width: "9%" }} />
+              <col style={{ width: "17%" }} /><col style={{ width: "12%" }} /><col style={{ width: "10%" }} />
+              <col style={{ width: "13%" }} /><col style={{ width: "11%" }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("name", "Item")}</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("category_id", "Category")}</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "right", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("price", "Price")}</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>Qty</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("stock", "Status")}</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("reorder", "Reorder at")}</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>Available</th>
+                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "right", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={8} style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 13 }}>No items match your search or filter.</td></tr>
+              )}
+              {rows.map(item => {
+                const s = getStatus(item);
+                const leftBorder = s === "out" ? DANGER : s === "low" ? WARNING : "transparent";
+                const tdStyle = { padding: "10px 8px", borderBottom: `1px solid ${BORDER}` };
+                return (
+                  <tr key={item.id}>
+                    <td style={{ ...tdStyle, borderLeft: `3px solid ${leftBorder}` }}>
+                      <div style={{ fontWeight: 700, color: TEXT }}>{item.name}</div>
+                      <div style={{ fontSize: 11, color: MUTED, marginTop: 1 }}>ID: {item.id}</div>
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: SUBTLE, color: MUTED }}>
+                        {item.category_id || "—"}
+                      </span>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: TEXT }}>{fmt(item.price ?? 0)}</td>
+                    <td style={tdStyle}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
+                        <span style={{ minWidth: 28, textAlign: "center", fontWeight: 800, fontSize: 14, color: TEXT }}>{item.stock ?? 0}</span>
+                        <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
+                      </div>
+                      <StockBar item={item} />
+                    </td>
+                    <td style={tdStyle}><StatusBadge item={item} /></td>
+                    <td style={{ ...tdStyle, color: MUTED, fontWeight: 600 }}>{item.reorder ?? 3} units</td>
+                    <td style={tdStyle}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                        <span style={{ position: "relative", display: "inline-block", width: 34, height: 20, flexShrink: 0 }}>
+                          <input type="checkbox" checked={item.available ?? true} onChange={() => toggleAvail(item)}
+                            style={{ opacity: 0, width: 0, height: 0, position: "absolute" }} />
+                          <span style={{ position: "absolute", inset: 0, borderRadius: 20, background: item.available ? DR : BORDER, transition: "background .2s" }} />
+                          <span style={{ position: "absolute", top: 3, left: item.available ? 16 : 3, width: 14, height: 14, borderRadius: "50%", background: "#fff", transition: "left .2s" }} />
+                        </span>
+                        <span style={{ fontSize: 12, color: item.available ? SUCCESS : MUTED, fontWeight: 600 }}>{item.available ? "On" : "Off"}</span>
+                      </label>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: "right" }}>
+                      <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {rows.length > 0 && (
+            <div style={{ fontSize: 11, color: MUTED, padding: "10px 0", textAlign: "right" }}>
+              Showing {rows.length} of {items.length} items · updates live
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ══ MODALS ══ */}
 
       {modal === "restock" && (
-        <ModalShell title="Restock items" onClose={() => setModal(null)}>
+        <ModalShell title="Restock items" onClose={() => setModal(null)} isMobile={isMobile}>
           <div style={rowStyle}>
             <label style={labelStyle}>Item</label>
             <select value={rsItem} onChange={e => setRsItem(e.target.value)} style={inputStyle}>
@@ -437,7 +557,7 @@ export default function StockView({ demoMode }) {
           </div>
           <div style={rowStyle}>
             <label style={labelStyle}>Quantity to add</label>
-            <input type="number" min={1} value={rsQty} onChange={e => setRsQty(e.target.value)} style={inputStyle} />
+            <input type="number" min={1} inputMode="numeric" value={rsQty} onChange={e => setRsQty(e.target.value)} style={inputStyle} />
           </div>
           <div style={rowStyle}>
             <label style={labelStyle}>Reason</label>
@@ -453,9 +573,9 @@ export default function StockView({ demoMode }) {
               </div>
             ) : null;
           })()}
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button onClick={() => setModal(null)} style={ghostBtn}>Cancel</button>
-            <button onClick={doRestock} disabled={saving} style={{ ...primaryBtn, opacity: saving ? 0.6 : 1 }}>
+          <div style={{ display: "flex", gap: 8, justifyContent: isMobile ? "stretch" : "flex-end" }}>
+            <button onClick={() => setModal(null)} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined, textAlign: "center" }}>Cancel</button>
+            <button onClick={doRestock} disabled={saving} style={{ ...primaryBtn, flex: isMobile ? 1 : undefined, opacity: saving ? 0.6 : 1 }}>
               {saving ? "Saving…" : "Confirm restock"}
             </button>
           </div>
@@ -463,30 +583,30 @@ export default function StockView({ demoMode }) {
       )}
 
       {modal === "edit" && editItem && (
-        <ModalShell title={`Edit — ${editItem.name}`} onClose={() => setModal(null)}>
+        <ModalShell title={`Edit — ${editItem.name}`} onClose={() => setModal(null)} isMobile={isMobile}>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
             Category: <strong>{editItem.category_id || "—"}</strong> · ID: {editItem.id}
           </div>
           <div style={rowStyle}>
             <label style={labelStyle}>Stock (units)</label>
-            <input type="number" min={0} value={edStock} onChange={e => setEdStock(e.target.value)} style={inputStyle} />
+            <input type="number" min={0} inputMode="numeric" value={edStock} onChange={e => setEdStock(e.target.value)} style={inputStyle} />
           </div>
           <div style={rowStyle}>
             <label style={labelStyle}>Reorder point — alert when stock ≤ this</label>
-            <input type="number" min={0} value={edReorder} onChange={e => setEdReorder(e.target.value)} style={inputStyle} />
+            <input type="number" min={0} inputMode="numeric" value={edReorder} onChange={e => setEdReorder(e.target.value)} style={inputStyle} />
           </div>
           <div style={rowStyle}>
             <label style={labelStyle}>Price (₱)</label>
-            <input type="number" min={0} value={edPrice} onChange={e => setEdPrice(e.target.value)} style={inputStyle} />
+            <input type="number" min={0} inputMode="decimal" value={edPrice} onChange={e => setEdPrice(e.target.value)} style={inputStyle} />
           </div>
           {Number(edStock) !== (editItem.stock ?? 0) && (
             <div style={{ background: WARNING_BG, borderRadius: 8, padding: "9px 13px", marginBottom: 14, fontSize: 12, color: WARNING }}>
               Stock will change from <strong>{editItem.stock ?? 0}</strong> → <strong>{edStock}</strong> units. This will be logged.
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button onClick={() => setModal(null)} style={ghostBtn}>Cancel</button>
-            <button onClick={doEdit} disabled={saving} style={{ ...primaryBtn, opacity: saving ? 0.6 : 1 }}>
+          <div style={{ display: "flex", gap: 8, justifyContent: isMobile ? "stretch" : "flex-end" }}>
+            <button onClick={() => setModal(null)} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined, textAlign: "center" }}>Cancel</button>
+            <button onClick={doEdit} disabled={saving} style={{ ...primaryBtn, flex: isMobile ? 1 : undefined, opacity: saving ? 0.6 : 1 }}>
               {saving ? "Saving…" : "Save changes"}
             </button>
           </div>
@@ -494,7 +614,7 @@ export default function StockView({ demoMode }) {
       )}
 
       {modal === "log" && (
-        <ModalShell title="Stock activity log" onClose={() => setModal(null)}>
+        <ModalShell title="Stock activity log" onClose={() => setModal(null)} isMobile={isMobile}>
           <div style={{ fontSize: 11, color: MUTED, marginBottom: 12 }}>Current session · {log.length} entries</div>
           {log.length === 0 ? (
             <div style={{ color: MUTED, fontSize: 13, padding: "16px 0" }}>No stock changes yet this session.</div>
@@ -502,7 +622,13 @@ export default function StockView({ demoMode }) {
             const isPos = String(l.change).startsWith("+");
             const isNeg = String(l.change).startsWith("-");
             return (
-              <div key={idx} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: `1px solid ${BORDER}`, fontSize: 12 }}>
+              <div key={idx} style={{
+                display: "flex",
+                flexDirection: isMobile ? "column" : "row",
+                alignItems: isMobile ? "flex-start" : "center",
+                justifyContent: "space-between", gap: isMobile ? 4 : 0,
+                padding: "8px 0", borderBottom: `1px solid ${BORDER}`, fontSize: 12,
+              }}>
                 <div>
                   <div style={{ fontWeight: 700, color: TEXT }}>{l.item}</div>
                   <div style={{ color: MUTED, marginTop: 1 }}>{l.reason}</div>
@@ -515,15 +641,19 @@ export default function StockView({ demoMode }) {
               </div>
             );
           })}
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
-            <button onClick={() => setModal(null)} style={ghostBtn}>Close</button>
+          <div style={{ display: "flex", justifyContent: isMobile ? "stretch" : "flex-end", marginTop: 16 }}>
+            <button onClick={() => setModal(null)} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined, textAlign: "center" }}>Close</button>
           </div>
         </ModalShell>
       )}
 
       {toast && (
         <div style={{
-          position: "fixed", bottom: 24, right: 24, zIndex: 300,
+          position: "fixed", zIndex: 300,
+          bottom: isMobile ? `calc(14px + ${SAFE_BOTTOM})` : 24,
+          right: isMobile ? 14 : 24,
+          left: isMobile ? 14 : "auto",
+          textAlign: isMobile ? "center" : "left",
           background: toast.type === "err" ? DANGER_BG : SUCCESS_BG,
           color:      toast.type === "err" ? DANGER    : SUCCESS,
           border:    `1px solid ${toast.type === "err" ? DANGER : SUCCESS}`,

@@ -1,4 +1,4 @@
-export const DR = "#8B0000";
+export const DR = "#247494";
 export const DR_LIGHT = "#FFF0F0";
 export const BG = "#FFFFFF";
 export const TEXT = "#111111";

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { DR, BG, TEXT, MUTED, BORDER, SUBTLE, FONT } from "../../ui/styles";
 import fmt from "../../function/fmt";
 import { supabase } from "../../supabase/supabase";
+import { useIsMobile, useIsTablet } from "../hooks/useMediaQuery";
 
 // ── Color tokens ───────────────────────────────────────────────────────────────
 const STOCK_OK   = "#27AE60";
@@ -14,6 +15,15 @@ const PIE_COLORS = [DR, BLUE, STOCK_OK, STOCK_LOW, PURPLE, TEAL, "#D35400", "#1A
 
 // ── Shared primitives ──────────────────────────────────────────────────────────
 
+/** Wraps content that must keep a minimum width and scroll sideways on small screens */
+function ScrollX({ children, minWidth }) {
+  return (
+    <div style={{ overflowX: "auto", overflowY: "hidden", WebkitOverflowScrolling: "touch" }}>
+      <div style={{ minWidth }}>{children}</div>
+    </div>
+  );
+}
+
 function PieChart({ data, size = 160 }) {
   const total = data.reduce((s, d) => s + d.value, 0);
   if (total === 0) return <div style={{ width: size, height: size, borderRadius: "50%", background: "#eee" }} />;
@@ -25,7 +35,8 @@ function PieChart({ data, size = 160 }) {
   });
   const xy = (a, r) => { const rad = (a * Math.PI) / 180; return [50 + r * Math.cos(rad), 50 + r * Math.sin(rad)]; };
   return (
-    <svg viewBox="0 0 100 100" width={size} height={size} style={{ display: "block" }}>
+    <svg viewBox="0 0 100 100" width={size} height={size}
+      style={{ display: "block", maxWidth: "100%", height: "auto" }}>
       {slices.map((s, i) => {
         const [x1, y1] = xy(s.startAngle, 38);
         const [x2, y2] = xy(s.startAngle + s.angle, 38);
@@ -36,14 +47,17 @@ function PieChart({ data, size = 160 }) {
   );
 }
 
-function BarChart({ data, height = 180, color = DR, showValue = false }) {
+function BarChart({ data, height = 180, color = DR, showValue = false, minBarWidth = 0 }) {
   const max = Math.max(...data.map((d) => d.value), 1);
-  return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 5, height, paddingTop: 8 }}>
+  const bars = (
+    <div style={{
+      display: "flex", alignItems: "flex-end", gap: 5, height, paddingTop: 8,
+      minWidth: minBarWidth ? data.length * minBarWidth : undefined,
+    }}>
       {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, height: "100%" }}>
+        <div key={i} style={{ flex: 1, minWidth: minBarWidth || undefined, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, height: "100%" }}>
           {showValue && d.value > 0 && (
-            <div style={{ fontSize: 8, color: MUTED, fontWeight: 700 }}>{d.value}</div>
+            <div style={{ fontSize: 9, color: MUTED, fontWeight: 700 }}>{d.value}</div>
           )}
           <div style={{ flex: 1, display: "flex", alignItems: "flex-end", width: "100%" }}>
             <div style={{
@@ -52,27 +66,28 @@ function BarChart({ data, height = 180, color = DR, showValue = false }) {
               transition: "height 0.4s ease", minHeight: d.value > 0 ? 4 : 0,
             }} title={`${d.label}: ${d.value}`} />
           </div>
-          <div style={{ fontSize: 8, color: MUTED, textAlign: "center", lineHeight: 1.2, wordBreak: "break-word" }}>{d.label}</div>
+          <div style={{ fontSize: 9, color: MUTED, textAlign: "center", lineHeight: 1.2, wordBreak: "break-word" }}>{d.label}</div>
         </div>
       ))}
     </div>
   );
+  return minBarWidth ? <ScrollX minWidth={data.length * minBarWidth}>{bars}</ScrollX> : bars;
 }
 
 /** Horizontal bar chart — great for ranked lists */
-function HBarChart({ data, color = BLUE, formatValue = (v) => v }) {
+function HBarChart({ data, color = BLUE, formatValue = (v) => v, compact = false }) {
   const max = Math.max(...data.map((d) => d.value), 1);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
       {data.map((d, i) => (
         <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 110, fontSize: 11, color: TEXT, fontWeight: 600, textAlign: "right", flexShrink: 0,
-            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.label}</div>
-          <div style={{ flex: 1, background: SUBTLE, borderRadius: 4, height: 14, overflow: "hidden" }}>
+          <div style={{ width: compact ? 84 : 110, fontSize: 11, color: TEXT, fontWeight: 600, textAlign: "right", flexShrink: 0,
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={d.label}>{d.label}</div>
+          <div style={{ flex: 1, minWidth: 40, background: SUBTLE, borderRadius: 4, height: 14, overflow: "hidden" }}>
             <div style={{ width: `${(d.value / max) * 100}%`, height: "100%",
               background: d.color || color, borderRadius: 4, transition: "width 0.4s ease", minWidth: d.value > 0 ? 4 : 0 }} />
           </div>
-          <div style={{ width: 68, fontSize: 11, color: MUTED, fontWeight: 700, flexShrink: 0 }}>{formatValue(d.value)}</div>
+          <div style={{ width: compact ? 58 : 68, fontSize: 11, color: MUTED, fontWeight: 700, flexShrink: 0, textAlign: "right" }}>{formatValue(d.value)}</div>
         </div>
       ))}
     </div>
@@ -80,12 +95,15 @@ function HBarChart({ data, color = BLUE, formatValue = (v) => v }) {
 }
 
 /** Stock bar with per-bar colour + dashed reorder line */
-function StockBarChart({ data, height = 200 }) {
+function StockBarChart({ data, height = 200, minBarWidth = 0 }) {
   const max = Math.max(...data.map((d) => d.value), 1);
-  return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 5, height, paddingTop: 8 }}>
+  const bars = (
+    <div style={{
+      display: "flex", alignItems: "flex-end", gap: 5, height, paddingTop: 8,
+      minWidth: minBarWidth ? data.length * minBarWidth : undefined,
+    }}>
       {data.map((d, i) => (
-        <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, height: "100%" }}>
+        <div key={i} style={{ flex: 1, minWidth: minBarWidth || undefined, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, height: "100%" }}>
           <div style={{ flex: 1, display: "flex", alignItems: "flex-end", width: "100%", position: "relative" }}>
             {d.reorder > 0 && (
               <div style={{ position: "absolute", bottom: `${Math.min((d.reorder / max) * 100, 98)}%`,
@@ -97,11 +115,12 @@ function StockBarChart({ data, height = 200 }) {
               transition: "height 0.4s ease", minHeight: d.value > 0 ? 4 : 0 }}
               title={`${d.label}: ${d.value} (reorder @${d.reorder})`} />
           </div>
-          <div style={{ fontSize: 8, color: MUTED, textAlign: "center", lineHeight: 1.2, wordBreak: "break-word" }}>{d.label}</div>
+          <div style={{ fontSize: 9, color: MUTED, textAlign: "center", lineHeight: 1.2, wordBreak: "break-word" }}>{d.label}</div>
         </div>
       ))}
     </div>
   );
+  return minBarWidth ? <ScrollX minWidth={data.length * minBarWidth}>{bars}</ScrollX> : bars;
 }
 
 /** Gauge / progress ring — for single percentage KPI */
@@ -110,7 +129,7 @@ function GaugeRing({ pct, color, size = 90, label }) {
   const dash = (pct / 100) * circ;
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
-      <svg width={size} height={size} viewBox="0 0 100 100">
+      <svg width={size} height={size} viewBox="0 0 100 100" style={{ maxWidth: "100%" }}>
         <circle cx="50" cy="50" r={r} fill="none" stroke={SUBTLE} strokeWidth="10" />
         <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="10"
           strokeDasharray={`${dash} ${circ}`} strokeDashoffset={circ * 0.25}
@@ -124,13 +143,13 @@ function GaugeRing({ pct, color, size = 90, label }) {
 
 function StatCard({ label, value, sub, color = TEXT, badge }) {
   return (
-    <div style={{ background: SUBTLE, borderRadius: 10, padding: "14px 16px", position: "relative" }}>
+    <div style={{ background: SUBTLE, borderRadius: 10, padding: "14px 16px", position: "relative", minWidth: 0 }}>
       {badge && (
         <div style={{ position: "absolute", top: 10, right: 10, background: badge.bg, color: badge.text,
           fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4 }}>{badge.label}</div>
       )}
-      <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 5 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, color, lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 5, paddingRight: badge ? 52 : 0 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1.1, wordBreak: "break-word" }}>{value}</div>
       {sub && <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{sub}</div>}
     </div>
   );
@@ -138,26 +157,26 @@ function StatCard({ label, value, sub, color = TEXT, badge }) {
 
 function Legend({ data }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 7, width: "100%", minWidth: 0 }}>
       {data.map((d, i) => (
-        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, minWidth: 0 }}>
           <div style={{ width: 11, height: 11, borderRadius: 3, background: d.color, flexShrink: 0 }} />
-          <span style={{ color: TEXT, fontWeight: 600 }}>{d.label}</span>
-          <span style={{ color: MUTED, marginLeft: "auto", fontWeight: 700 }}>{d.display ?? d.value}</span>
+          <span style={{ color: TEXT, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.label}</span>
+          <span style={{ color: MUTED, marginLeft: "auto", fontWeight: 700, flexShrink: 0, paddingLeft: 8 }}>{d.display ?? d.value}</span>
         </div>
       ))}
     </div>
   );
 }
 
-function ChartCard({ title, subtitle, children, style = {}, accent }) {
+function ChartCard({ title, subtitle, children, style = {}, accent, compact = false }) {
   return (
     <div style={{ border: `1px solid ${accent ? accent + "55" : BORDER}`, borderRadius: 10,
-      padding: "16px 18px", background: BG,
+      padding: compact ? "14px 14px" : "16px 18px", background: BG, minWidth: 0,
       borderLeft: accent ? `4px solid ${accent}` : undefined, ...style }}>
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>{title}</div>
-        {subtitle && <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{subtitle}</div>}
+        {subtitle && <div style={{ fontSize: 11, color: MUTED, marginTop: 2, lineHeight: 1.4 }}>{subtitle}</div>}
       </div>
       {children}
     </div>
@@ -168,7 +187,7 @@ function SectionDivider({ label, icon }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "28px 0 18px" }}>
       <div style={{ height: 1, background: BORDER, flex: 1 }} />
-      <span style={{ fontSize: 11, fontWeight: 800, color: MUTED, textTransform: "uppercase", letterSpacing: 1 }}>
+      <span style={{ fontSize: 11, fontWeight: 800, color: MUTED, textTransform: "uppercase", letterSpacing: 1, textAlign: "center" }}>
         {icon} {label}
       </span>
       <div style={{ height: 1, background: BORDER, flex: 1 }} />
@@ -177,24 +196,25 @@ function SectionDivider({ label, icon }) {
 }
 
 function AlertRow({ item, type }) {
-  const isOut     = type === "out";
+  const isOut      = type === "out";
   const isConflict = type === "conflict";
-  const bg    = isOut ? "#fdecea" : isConflict ? "#f3e5f5" : "#fff8e1";
-  const border= isOut ? "#f5c6c2" : isConflict ? "#ce93d8" : "#ffe082";
-  const dot   = isOut ? STOCK_OUT  : isConflict ? PURPLE : STOCK_LOW;
-  const tag   = isOut ? "OUT" : isConflict ? "CONFLICT" : "LOW";
-  const tagBg = isOut ? "#fdecea" : isConflict ? "#f3e5f5" : "#fff8e1";
+  const bg     = isOut ? "#fdecea" : isConflict ? "#f3e5f5" : "#fff8e1";
+  const border = isOut ? "#f5c6c2" : isConflict ? "#ce93d8" : "#ffe082";
+  const dot    = isOut ? STOCK_OUT : isConflict ? PURPLE : STOCK_LOW;
+  const tag    = isOut ? "OUT" : isConflict ? "CONFLICT" : "LOW";
+  const tagBg  = isOut ? "#fdecea" : isConflict ? "#f3e5f5" : "#fff8e1";
 
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+      flexWrap: "wrap", rowGap: 4, columnGap: 8,
       padding: "7px 10px", borderRadius: 7, background: bg, border: `1px solid ${border}`, marginBottom: 5 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ width: 7, height: 7, borderRadius: "50%", background: dot }} />
-        <span style={{ fontSize: 12, fontWeight: 700, color: TEXT }}>{item.name}</span>
-        <span style={{ fontSize: 9, fontWeight: 800, color: dot, background: tagBg,
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: "1 1 140px" }}>
+        <div style={{ width: 7, height: 7, borderRadius: "50%", background: dot, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: TEXT, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</span>
+        <span style={{ fontSize: 9, fontWeight: 800, color: dot, background: tagBg, flexShrink: 0,
           border: `1px solid ${border}`, padding: "1px 5px", borderRadius: 3 }}>{tag}</span>
       </div>
-      <div style={{ display: "flex", gap: 10, fontSize: 11, color: MUTED }}>
+      <div style={{ display: "flex", gap: 10, fontSize: 11, color: MUTED, flexShrink: 0 }}>
         {!isConflict && <>
           <span>Stock: <strong style={{ color: dot }}>{item.stock}</strong></span>
           <span>Reorder: <strong>{item.reorder}</strong></span>
@@ -211,6 +231,9 @@ function Empty() {
 
 // ── Main View ──────────────────────────────────────────────────────────────────
 export default function StatisticsView() {
+  const isMobile = useIsMobile();
+  const isTablet = useIsTablet();
+
   const [range, setRange]         = useState("7d");
   const [orders, setOrders]       = useState([]);
   const [categories, setCategories] = useState([]);
@@ -396,13 +419,11 @@ export default function StatisticsView() {
     const priceDistData = Object.entries(priceBuckets).map(([label, value]) => ({ label, value, color: TEAL }));
 
     // ── Stock vs Reorder gap (buffer) ─────────────────────────────────────────
-    // Positive = buffer above reorder; negative = deficit
     const gapData = [...real]
       .map((i) => ({ label: i.name, value: i.stock - i.reorder, raw: i }))
       .sort((a, b) => a.value - b.value); // worst first
 
     // ── Sales velocity → estimated days of stock ──────────────────────────────
-    // Use all completed orders (not date-filtered) for velocity accuracy
     const allCompleted = orders.filter((o) => o.status === "completed");
     const velocityMap = {}; // item_name → total_qty_sold
     allCompleted.forEach((o) => {
@@ -410,7 +431,6 @@ export default function StatisticsView() {
         velocityMap[it.name] = (velocityMap[it.name] || 0) + it.qty;
       });
     });
-    // Days of data in orders
     let oldestDate = new Date();
     allCompleted.forEach((o) => { const d = new Date(o.created_at); if (d < oldestDate) oldestDate = d; });
     const totalDays = Math.max((now - oldestDate) / (1000 * 60 * 60 * 24), 1);
@@ -444,7 +464,7 @@ export default function StatisticsView() {
     });
     const catStockData = Object.entries(catStockMap).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value }));
 
-    // Reorder alerts — ALL items including "sample"
+    // Reorder alerts
     const reorderAlerts = real
       .filter((i) => i.stock <= i.reorder)
       .sort((a, b) => a.stock - b.stock);
@@ -477,31 +497,54 @@ export default function StatisticsView() {
     { key: "all",   label: "All Time" },
   ];
 
+  // ── Responsive layout helpers ──────────────────────────────────────────────
+  const cols = (mobile, tablet, desktop) => (isMobile ? mobile : isTablet ? tablet : desktop);
+  const gap  = isMobile ? 10 : 14;
+  const pieSize     = isMobile ? 140 : 130;
+  const bigPieSize  = isMobile ? 150 : 150;
+  // Side-by-side pie + legend only where there's room
+  const pieRowStyle = { display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 12 : 16, alignItems: "center" };
+  const pieColStyle = { display: "flex", flexDirection: "column", gap: 14, alignItems: "center" };
+
   if (loading && orders.length === 0) return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", fontFamily: FONT, color: MUTED }}>
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", minHeight: 240, fontFamily: FONT, color: MUTED, padding: 20, textAlign: "center" }}>
       <h3>Loading analytics...</h3>
     </div>
   );
   if (error) return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", fontFamily: FONT, color: DR }}>
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", minHeight: 240, fontFamily: FONT, color: DR, padding: 20, textAlign: "center" }}>
       <h3>Error: {error}</h3>
     </div>
   );
 
   return (
-    <div style={{ padding: 22, height: "100%", overflowY: "auto", fontFamily: FONT }}>
+    <div style={{
+      padding: isMobile ? "14px 12px 32px" : 22,
+      height: "100%", overflowY: "auto", WebkitOverflowScrolling: "touch",
+      fontFamily: FONT, boxSizing: "border-box",
+    }}>
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+      <div style={{
+        display: "flex", flexDirection: isMobile ? "column" : "row",
+        justifyContent: "space-between", alignItems: isMobile ? "stretch" : "flex-start",
+        gap: 12, marginBottom: 20,
+      }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Statistics</h2>
-          <p style={{ margin: "4px 0 0", color: MUTED, fontSize: 13 }}>Sales performance · Order breakdown · Inventory analytics</p>
+          <h2 style={{ margin: 0, fontSize: isMobile ? 17 : 19, fontWeight: 800 }}>Statistics</h2>
+          <p style={{ margin: "4px 0 0", color: MUTED, fontSize: isMobile ? 12 : 13, lineHeight: 1.4 }}>
+            Sales performance · Order breakdown · Inventory analytics
+          </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+
+        <div style={{
+          display: "flex", flexDirection: isMobile ? "column" : "row",
+          alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 10 : 14,
+        }}>
           {/* Live badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: MUTED }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: MUTED, flexWrap: "wrap" }}>
             <div style={{
-              width: 8, height: 8, borderRadius: "50%",
+              width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
               background: liveFlash ? "#27AE60" : "#4ade80",
               boxShadow: liveFlash ? "0 0 0 4px rgba(39,174,96,0.3)" : "none",
               transition: "all 0.3s ease",
@@ -513,12 +556,17 @@ export default function StatisticsView() {
               </span>
             )}
           </div>
-          {/* Range buttons */}
-          <div style={{ display: "flex", gap: 6 }}>
+
+          {/* Range buttons — scroll sideways instead of squashing */}
+          <div style={{
+            display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch",
+            paddingBottom: isMobile ? 2 : 0,
+          }}>
             {ranges.map((r) => (
               <button key={r.key} onClick={() => setRange(r.key)}
-                style={{ padding: "6px 14px", borderRadius: 6, border: "none", cursor: "pointer",
-                  fontFamily: FONT, fontSize: 12, fontWeight: 700,
+                style={{ padding: isMobile ? "9px 16px" : "6px 14px", borderRadius: 6, border: "none", cursor: "pointer",
+                  fontFamily: FONT, fontSize: 12, fontWeight: 700, flex: isMobile ? "1 0 auto" : "0 0 auto",
+                  whiteSpace: "nowrap", minHeight: isMobile ? 40 : undefined,
                   background: range === r.key ? DR : SUBTLE,
                   color: range === r.key ? "#fff" : MUTED }}>
                 {r.label}
@@ -534,7 +582,7 @@ export default function StatisticsView() {
       <SectionDivider label="Sales Overview" icon="📊" />
 
       {/* KPI Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 18 }}>
         <StatCard label="Total Revenue"     value={fmt(totalRevenue)}                  color={DR} />
         <StatCard label="Completed Orders"  value={completed.length}                   sub={`of ${filtered.length} total`} color={STOCK_OK} />
         <StatCard label="Avg Order Value"   value={fmt(avgOrder)}                      color={BLUE} />
@@ -543,14 +591,16 @@ export default function StatisticsView() {
       </div>
 
       {/* Row 1 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 14, marginBottom: 14 }}>
-        <ChartCard title={`Daily Revenue — ${ranges.find(r => r.key === range)?.label}`}>
-          {dailyRevenue.length > 0 ? <BarChart data={dailyRevenue} height={200} color={DR} /> : <Empty />}
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "1fr", "1fr 340px"), gap, marginBottom: gap }}>
+        <ChartCard compact={isMobile} title={`Daily Revenue — ${ranges.find(r => r.key === range)?.label}`}>
+          {dailyRevenue.length > 0
+            ? <BarChart data={dailyRevenue} height={isMobile ? 170 : 200} color={DR} minBarWidth={dailyRevenue.length > 8 ? 34 : 0} />
+            : <Empty />}
         </ChartCard>
-        <ChartCard title="Order Status">
+        <ChartCard compact={isMobile} title="Order Status">
           {statusData.length > 0 ? (
-            <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
-              <PieChart data={statusData} size={150} />
+            <div style={pieRowStyle}>
+              <PieChart data={statusData} size={bigPieSize} />
               <Legend data={statusData} />
             </div>
           ) : <Empty />}
@@ -558,22 +608,24 @@ export default function StatisticsView() {
       </div>
 
       {/* Row 2 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 270px 270px", gap: 14, marginBottom: 14 }}>
-        <ChartCard title="Top Items by Qty Sold">
-          {topItems.length > 0 ? <BarChart data={topItems} height={180} color={BLUE} showValue /> : <Empty />}
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "repeat(2, 1fr)", "1fr 270px 270px"), gap, marginBottom: gap }}>
+        <ChartCard compact={isMobile} title="Top Items by Qty Sold" style={isTablet && !isMobile ? { gridColumn: "1 / -1" } : undefined}>
+          {topItems.length > 0
+            ? <BarChart data={topItems} height={180} color={BLUE} showValue minBarWidth={isMobile ? 44 : 0} />
+            : <Empty />}
         </ChartCard>
-        <ChartCard title="Payment Method">
+        <ChartCard compact={isMobile} title="Payment Method">
           {paymentData.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
-              <PieChart data={paymentData} size={130} />
+            <div style={pieColStyle}>
+              <PieChart data={paymentData} size={pieSize} />
               <Legend data={paymentData} />
             </div>
           ) : <Empty />}
         </ChartCard>
-        <ChartCard title="Order Type">
+        <ChartCard compact={isMobile} title="Order Type">
           {typeData.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
-              <PieChart data={typeData} size={130} />
+            <div style={pieColStyle}>
+              <PieChart data={typeData} size={pieSize} />
               <Legend data={typeData} />
             </div>
           ) : <Empty />}
@@ -581,14 +633,16 @@ export default function StatisticsView() {
       </div>
 
       {/* Row 3 */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 290px", gap: 14 }}>
-        <ChartCard title="Revenue by Category">
-          {catRevData.length > 0 ? <BarChart data={catRevData} height={160} color={STOCK_OK} /> : <Empty />}
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "1fr", "1fr 290px"), gap }}>
+        <ChartCard compact={isMobile} title="Revenue by Category">
+          {catRevData.length > 0
+            ? <BarChart data={catRevData} height={160} color={STOCK_OK} minBarWidth={isMobile ? 52 : 0} />
+            : <Empty />}
         </ChartCard>
-        <ChartCard title="Discount Type Breakdown">
+        <ChartCard compact={isMobile} title="Discount Type Breakdown">
           {discountData.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
-              <PieChart data={discountData} size={130} />
+            <div style={pieColStyle}>
+              <PieChart data={discountData} size={pieSize} />
               <Legend data={discountData} />
             </div>
           ) : <div style={{ textAlign: "center", padding: "30px 0", color: MUTED, fontSize: 13 }}>No discounts applied</div>}
@@ -601,7 +655,7 @@ export default function StatisticsView() {
       <SectionDivider label="Inventory & Stock Analytics" icon="📦" />
 
       {/* Inventory KPI Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 18 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 18 }}>
         <StatCard label="Total SKUs"      value={inv.real.length}        color={TEXT} />
         <StatCard label="In Stock"        value={inv.inStock.length}     color={STOCK_OK}  sub="Above reorder pt." />
         <StatCard label="Low Stock"       value={inv.lowStock.length}    color={STOCK_LOW} sub="At/below reorder"
@@ -613,22 +667,22 @@ export default function StatisticsView() {
       </div>
 
       {/* Gauge row */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 14 }}>
-        <ChartCard title="Stock Health Rate" subtitle="% of SKUs above their reorder point">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap, marginBottom: gap }}>
+        <ChartCard compact={isMobile} title="Stock Health Rate" subtitle="% of SKUs above their reorder point">
           <div style={{ display: "flex", justifyContent: "center", padding: "8px 0" }}>
             <GaugeRing pct={inv.healthPct} color={inv.healthPct >= 70 ? STOCK_OK : inv.healthPct >= 40 ? STOCK_LOW : STOCK_OUT} size={110} label="In-Stock Rate" />
           </div>
         </ChartCard>
-        <ChartCard title="Availability Rate" subtitle="% of items marked available = TRUE">
+        <ChartCard compact={isMobile} title="Availability Rate" subtitle="% of items marked available = TRUE">
           <div style={{ display: "flex", justifyContent: "center", padding: "8px 0" }}>
             <GaugeRing pct={inv.availPct} color={inv.availPct >= 80 ? STOCK_OK : STOCK_LOW} size={110} label="Available Rate" />
           </div>
         </ChartCard>
-        <ChartCard title="Data Conflicts" subtitle="available=TRUE but stock=0" accent={inv.conflicts.length > 0 ? PURPLE : undefined}>
+        <ChartCard compact={isMobile} title="Data Conflicts" subtitle="available=TRUE but stock=0" accent={inv.conflicts.length > 0 ? PURPLE : undefined}>
           {inv.conflicts.length === 0 ? (
             <div style={{ textAlign: "center", padding: "24px 0", color: STOCK_OK, fontSize: 13, fontWeight: 700 }}>✓ No conflicts detected</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 180, overflowY: "auto" }}>
               {inv.conflicts.map((i) => <AlertRow key={i.id} item={i} type="conflict" />)}
             </div>
           )}
@@ -636,24 +690,27 @@ export default function StatisticsView() {
       </div>
 
       {/* Stock Status + Availability + Reorder Alerts */}
-      <div style={{ display: "grid", gridTemplateColumns: "240px 240px 1fr", gap: 14, marginBottom: 14 }}>
-        <ChartCard title="Stock Health" subtitle="By reorder threshold">
-          <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
-            <PieChart data={inv.stockStatusData} size={130} />
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "repeat(2, 1fr)", "240px 240px 1fr"), gap, marginBottom: gap }}>
+        <ChartCard compact={isMobile} title="Stock Health" subtitle="By reorder threshold">
+          <div style={pieColStyle}>
+            <PieChart data={inv.stockStatusData} size={pieSize} />
             <Legend data={inv.stockStatusData} />
           </div>
         </ChartCard>
-        <ChartCard title="Item Availability" subtitle="available flag">
-          <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
-            <PieChart data={inv.availData} size={130} />
+        <ChartCard compact={isMobile} title="Item Availability" subtitle="available flag">
+          <div style={pieColStyle}>
+            <PieChart data={inv.availData} size={pieSize} />
             <Legend data={inv.availData} />
           </div>
         </ChartCard>
-        <ChartCard title="⚠ Reorder Alerts" subtitle="Items at or below reorder point — sorted by urgency" accent={inv.reorderAlerts.length > 0 ? STOCK_LOW : undefined}>
+        <ChartCard compact={isMobile} title="⚠ Reorder Alerts"
+          subtitle="Items at or below reorder point — sorted by urgency"
+          accent={inv.reorderAlerts.length > 0 ? STOCK_LOW : undefined}
+          style={isTablet && !isMobile ? { gridColumn: "1 / -1" } : undefined}>
           {inv.reorderAlerts.length === 0 ? (
             <div style={{ textAlign: "center", padding: "30px 0", color: STOCK_OK, fontSize: 13, fontWeight: 700 }}>✓ All items are well-stocked</div>
           ) : (
-            <div style={{ maxHeight: 200, overflowY: "auto" }}>
+            <div style={{ maxHeight: 200, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
               {inv.reorderAlerts.map((i) => (
                 <AlertRow key={i.id} item={i} type={i.stock === 0 ? "out" : "low"} />
               ))}
@@ -663,28 +720,32 @@ export default function StatisticsView() {
       </div>
 
       {/* Stock bar + Category stock */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: 14, marginBottom: 14 }}>
-        <ChartCard title="Stock Levels per Item"
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "1fr", "1fr 280px"), gap, marginBottom: gap }}>
+        <ChartCard compact={isMobile} title="Stock Levels per Item"
           subtitle="Sorted lowest→highest · Dashed orange = reorder point · 🟥 Out · 🟧 Low · 🟩 OK">
-          {inv.stockBarData.length > 0 ? <StockBarChart data={inv.stockBarData} height={200} /> : <Empty />}
+          {inv.stockBarData.length > 0
+            ? <StockBarChart data={inv.stockBarData} height={isMobile ? 180 : 200} minBarWidth={isMobile ? 44 : (inv.stockBarData.length > 14 ? 34 : 0)} />
+            : <Empty />}
         </ChartCard>
-        <ChartCard title="Units by Category" subtitle="Total stock units per category">
-          {inv.catStockData.length > 0 ? <BarChart data={inv.catStockData} height={200} color={TEAL} showValue /> : <Empty />}
+        <ChartCard compact={isMobile} title="Units by Category" subtitle="Total stock units per category">
+          {inv.catStockData.length > 0
+            ? <BarChart data={inv.catStockData} height={200} color={TEAL} showValue minBarWidth={isMobile ? 52 : 0} />
+            : <Empty />}
         </ChartCard>
       </div>
 
       {/* Inventory Value per Item + by Category */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14, marginBottom: 14 }}>
-        <ChartCard title="Inventory Value per Item (Top 8)"
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "1fr", "1fr 320px"), gap, marginBottom: gap }}>
+        <ChartCard compact={isMobile} title="Inventory Value per Item (Top 8)"
           subtitle="price × stock — higher = more capital tied up">
           {inv.invValueData.length > 0
-            ? <HBarChart data={inv.invValueData} color={BLUE} formatValue={(v) => fmt(v)} />
+            ? <HBarChart data={inv.invValueData} color={BLUE} formatValue={(v) => fmt(v)} compact={isMobile} />
             : <Empty />}
         </ChartCard>
-        <ChartCard title="Inventory Value by Category">
+        <ChartCard compact={isMobile} title="Inventory Value by Category">
           {inv.catValueData.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "center" }}>
-              <PieChart data={inv.catValueData} size={130} />
+            <div style={pieColStyle}>
+              <PieChart data={inv.catValueData} size={pieSize} />
               <Legend data={inv.catValueData.map((d) => ({ ...d, display: fmt(d.value) }))} />
             </div>
           ) : <Empty />}
@@ -692,13 +753,13 @@ export default function StatisticsView() {
       </div>
 
       {/* Price Distribution + Coverage Days */}
-      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 14, marginBottom: 50 }}>
-        <ChartCard title="Price Distribution" subtitle="How many items fall in each price range">
+      <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "1fr", "280px 1fr"), gap, marginBottom: isMobile ? 24 : 50 }}>
+        <ChartCard compact={isMobile} title="Price Distribution" subtitle="How many items fall in each price range">
           {inv.priceDistData.some((d) => d.value > 0)
             ? <BarChart data={inv.priceDistData} height={160} color={TEAL} showValue />
             : <Empty />}
         </ChartCard>
-        <ChartCard title="Estimated Days of Stock Remaining"
+        <ChartCard compact={isMobile} title="Estimated Days of Stock Remaining"
           subtitle="Based on actual sales velocity · Items sold appear here; sorted most urgent first"
           accent={inv.coverageData.some((d) => d.coverageDays <= 7) ? STOCK_OUT : undefined}>
           {inv.coverageData.length === 0 ? (
@@ -712,20 +773,27 @@ export default function StatisticsView() {
                 const warn   = d.coverageDays <= 7 && !urgent;
                 const color  = urgent ? STOCK_OUT : warn ? STOCK_LOW : STOCK_OK;
                 return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10,
-                    padding: "6px 10px", borderRadius: 7,
-                    background: urgent ? "#fdecea" : warn ? "#fff8e1" : SUBTLE }}>
-                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
-                    <span style={{ fontSize: 12, fontWeight: 700, color: TEXT, width: 130, flexShrink: 0,
-                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.label}</span>
-                    <div style={{ flex: 1, background: BORDER, borderRadius: 3, height: 8, overflow: "hidden" }}>
+                  <div key={i} style={{
+                    display: "flex", alignItems: "center", flexWrap: "wrap",
+                    columnGap: 10, rowGap: 6, padding: "8px 10px", borderRadius: 7,
+                    background: urgent ? "#fdecea" : warn ? "#fff8e1" : SUBTLE,
+                  }}>
+                    <div style={{
+                      display: "flex", alignItems: "center", gap: 8, minWidth: 0,
+                      width: isMobile ? "100%" : 137, flexShrink: 0,
+                    }}>
+                      <div style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, fontWeight: 700, color: TEXT, minWidth: 0,
+                        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={d.label}>{d.label}</span>
+                    </div>
+                    <div style={{ flex: "1 1 80px", minWidth: 60, background: BORDER, borderRadius: 3, height: 8, overflow: "hidden" }}>
                       <div style={{ width: `${Math.min((d.coverageDays / 30) * 100, 100)}%`,
                         height: "100%", background: color, borderRadius: 3 }} />
                     </div>
-                    <span style={{ fontSize: 11, fontWeight: 800, color, width: 60, textAlign: "right", flexShrink: 0 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color, width: 56, textAlign: "right", flexShrink: 0 }}>
                       {d.coverageDays}d left
                     </span>
-                    <span style={{ fontSize: 10, color: MUTED, width: 70, textAlign: "right", flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: MUTED, width: 68, textAlign: "right", flexShrink: 0 }}>
                       {d.dailyRate}/day sold
                     </span>
                   </div>

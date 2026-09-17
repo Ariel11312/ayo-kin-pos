@@ -1,4 +1,4 @@
-import { DR, DR_LIGHT } from "../ui/styles";
+import { DR, DR_LIGHT, SUCCESS, SUCCESS_BG } from "../ui/styles";
 
 export function ErrBox({ msg }) {
   if (!msg) return null;

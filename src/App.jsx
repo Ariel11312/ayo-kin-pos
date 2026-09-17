@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import POS from "./components/POS";
 import LoginView from './components/Views/LoginView';
 import ProtectedRoute from './components/ProtectedRoute';
-
 const App = () => {
   return (
     <BrowserRouter>

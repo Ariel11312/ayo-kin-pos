@@ -4,11 +4,14 @@ import Btn from "../../function/btn";
 import fmt from "../../function/fmt";
 import Badge from "../../function/badge";
 import { ErrBox, OkBox } from "../../function/messageBox";
+import { useIsMobile } from "../hooks/useMediaQuery";
 
 const APPROVAL_THRESHOLD = 1000;
 const MANAGER_PIN = "4321";
 
 export default function VoidRefundView({ orders, setOrders, config, demoMode }) {
+  const isMobile = useIsMobile();
+
   const [search, setSearch] = useState("");
   const [found, setFound] = useState(null);
   const [action, setAction] = useState(null);
@@ -135,26 +138,45 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
     setFText("");
   };
 
+  const openOrder = (o) => {
+    setSearch(o.id);
+    setFound(o);
+    setSuccess("");
+    setError("");
+    setAction(null);
+    setStaffName("");
+    setPin("");
+    setPinError("");
+    if (typeof window !== "undefined") window.scrollTo?.({ top: 0, behavior: "smooth" });
+  };
+
+  const thBase = {
+    textAlign: "left",
+    padding: "10px 14px",
+    fontSize: 10,
+    fontWeight: 700,
+    color: MUTED,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    borderBottom: `2px solid ${BORDER}`,
+    position: "sticky",
+    top: 0,
+    background: SUBTLE,
+    zIndex: 5,
+    whiteSpace: "nowrap",
+  };
+
   const SortHeader = ({ label, sortKey, align }) => (
     <th
       onClick={() => toggleSort(sortKey)}
       style={{
+        ...thBase,
         textAlign: align || "left",
-        padding: "12px 16px",
         fontSize: 11,
-        fontWeight: 700,
-        color: MUTED,
-        textTransform: "uppercase",
-        letterSpacing: 0.8,
         cursor: "pointer",
-        whiteSpace: "nowrap",
         userSelect: "none",
-        borderBottom: `2px solid ${BORDER}`,
         transition: "color 0.2s",
-        position: "sticky",
-        top: 0,
-        background: SUBTLE,
-        zIndex: 10,
+        zIndex: 6,
       }}
       onMouseEnter={e => e.currentTarget.style.color = TEXT}
       onMouseLeave={e => e.currentTarget.style.color = MUTED}
@@ -170,9 +192,8 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
 
   const StatCard = ({ label, value, color, icon, subtitle }) => (
     <div style={{
-      flex: 1,
-      minWidth: 150,
-      padding: "18px 20px",
+      minWidth: 0,
+      padding: isMobile ? "14px 12px" : "18px 20px",
       background: `linear-gradient(135deg, ${BG} 0%, ${SUBTLE} 100%)`,
       border: `1px solid ${BORDER}`,
       borderRadius: 10,
@@ -181,10 +202,12 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
       textAlign: "center",
     }}
     onMouseEnter={e => {
+      if (isMobile) return;
       e.currentTarget.style.transform = "translateY(-2px)";
       e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)";
     }}
     onMouseLeave={e => {
+      if (isMobile) return;
       e.currentTarget.style.transform = "translateY(0)";
       e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.04)";
     }}
@@ -196,33 +219,74 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
         gap: 8,
         marginBottom: 8,
       }}>
-        {icon && <span style={{ fontSize: 18 }}>{icon}</span>}
-        <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.7 }}>
+        {icon && <span style={{ fontSize: 16 }}>{icon}</span>}
+        <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.7 }}>
           {label}
         </div>
       </div>
-      <div style={{ fontSize: 26, fontWeight: 800, color: color || TEXT, letterSpacing: -0.5 }}>
+      <div style={{ fontSize: isMobile ? 21 : 26, fontWeight: 800, color: color || TEXT, letterSpacing: -0.5, wordBreak: "break-word" }}>
         {value}
       </div>
-      {subtitle && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>{subtitle}</div>}
+      {subtitle && <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>{subtitle}</div>}
+    </div>
+  );
+
+  // Small-screen card row — replaces the table on phones
+  const HistoryCard = ({ o }) => (
+    <div
+      onClick={() => openOrder(o)}
+      style={{
+        border: `1px solid ${BORDER}`,
+        borderRadius: 8,
+        padding: "12px 14px",
+        marginBottom: 8,
+        background: BG,
+        cursor: "pointer",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <span style={{ fontFamily: "monospace", fontWeight: 700, color: DR, fontSize: 13 }}>{o.id}</span>
+        <Badge status={o.status} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: MUTED }}>
+          {new Date(o.created_at).toLocaleString("en-PH", { dateStyle: "medium", timeStyle: "short" })}
+        </span>
+        <strong style={{ fontSize: 14 }}>{fmt(o.total)}</strong>
+      </div>
+      <div style={{ fontSize: 11, color: MUTED, display: "flex", flexWrap: "wrap", gap: "2px 10px" }}>
+        <span style={{ textTransform: "capitalize" }}>{o.type}</span>
+        <span style={{ textTransform: "uppercase" }}>{o.payment_method}</span>
+        {o.processed_by && <span>by {o.processed_by}{o.approved ? " ★" : ""}</span>}
+      </div>
+      {o.void_reason && (
+        <div style={{ fontSize: 12, color: TEXT, marginTop: 6, lineHeight: 1.4 }}>{o.void_reason}</div>
+      )}
     </div>
   );
 
   return (
-    <div style={{
+    <div className="vr-root" style={{
       display: "flex",
       flexDirection: "column",
-      height: "100vh",
-      maxHeight: "100vh",
       background: BG,
       fontFamily: FONT,
     }}>
+      {/* Dynamic viewport height with a safe fallback for older browsers */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        .vr-root { height: 100vh; height: 100dvh; max-height: 100vh; max-height: 100dvh; }
+        .vr-scroll { -webkit-overflow-scrolling: touch; }
+        @media (max-width: 640px) {
+          .vr-root input, .vr-root select, .vr-root textarea { font-size: 16px; } /* stops iOS zoom-on-focus */
+        }
+      `}} />
+
       {/* Scrollable Content */}
-      <div style={{
+      <div className="vr-scroll" style={{
         flex: 1,
         overflowY: "auto",
         overflowX: "hidden",
-        padding: "24px 28px 28px 28px",
+        padding: isMobile ? "16px 14px 28px" : "24px 28px 28px 28px",
       }}>
         <div style={{
           maxWidth: 1200,
@@ -233,8 +297,8 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
           <div style={{
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 24,
+            alignItems: isMobile ? "flex-start" : "center",
+            marginBottom: isMobile ? 18 : 24,
             paddingBottom: 16,
             borderBottom: `2px solid ${BORDER}`,
             flexWrap: "wrap",
@@ -243,7 +307,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
             <div>
               <h2 style={{
                 margin: 0,
-                fontSize: 22,
+                fontSize: isMobile ? 19 : 22,
                 fontWeight: 800,
                 letterSpacing: -0.5,
                 color: TEXT,
@@ -254,6 +318,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                 margin: "4px 0 0",
                 color: MUTED,
                 fontSize: 13,
+                lineHeight: 1.4,
               }}>
                 Look up an order by ID to void or process a refund
               </p>
@@ -277,9 +342,9 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
           {/* Stats */}
           <div style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-            gap: 14,
-            marginBottom: 24,
+            gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+            gap: isMobile ? 10 : 14,
+            marginBottom: isMobile ? 18 : 24,
           }}>
             <StatCard
               label="Voided Orders"
@@ -312,9 +377,10 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
           {/* Search */}
           <div style={{
             display: "flex",
+            flexDirection: isMobile ? "column" : "row",
             gap: 10,
             marginBottom: 20,
-            padding: "14px 16px",
+            padding: isMobile ? "12px 12px" : "14px 16px",
             background: SUBTLE,
             borderRadius: 10,
             border: `1px solid ${BORDER}`,
@@ -324,10 +390,14 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
               onChange={e => setSearch(e.target.value)}
               onKeyDown={e => e.key === "Enter" && doSearch()}
               placeholder="Enter order ID — e.g. ORD-A1B2C3"
+              inputMode="search"
+              autoCapitalize="characters"
+              autoCorrect="off"
               style={{
                 ...inputStyle,
                 flex: 1,
-                padding: "10px 14px",
+                minWidth: 0,
+                padding: "11px 14px",
                 fontSize: 14,
                 borderRadius: 6,
                 border: `2px solid ${BORDER}`,
@@ -339,10 +409,12 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
             <Btn
               onClick={doSearch}
               style={{
-                padding: "10px 24px",
+                padding: "12px 24px",
                 borderRadius: 6,
                 fontWeight: 700,
                 fontSize: 13,
+                width: isMobile ? "100%" : undefined,
+                minHeight: 44,
               }}
             >
               🔍 Search
@@ -371,8 +443,8 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                   position: "absolute",
                   top: 10,
                   right: 12,
-                  width: 26,
-                  height: 26,
+                  width: 30,
+                  height: 30,
                   borderRadius: "50%",
                   border: `1px solid ${BORDER}`,
                   background: BG,
@@ -394,21 +466,22 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
               </button>
 
               <div style={{
-                padding: "14px 20px",
-                paddingRight: 48,
+                padding: isMobile ? "14px 14px" : "14px 20px",
+                paddingRight: 52,
                 borderBottom: `2px solid ${BORDER}`,
                 display: "flex",
                 justifyContent: "space-between",
-                alignItems: "center",
+                alignItems: isMobile ? "flex-start" : "center",
+                flexDirection: isMobile ? "column" : "row",
                 background: `linear-gradient(90deg, ${SUBTLE} 0%, ${BG} 100%)`,
                 flexWrap: "wrap",
                 gap: 8,
               }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   <span style={{
                     fontWeight: 800,
                     fontFamily: "monospace",
-                    fontSize: 17,
+                    fontSize: isMobile ? 15 : 17,
                     color: DR,
                     letterSpacing: 0.5,
                   }}>
@@ -424,10 +497,10 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                 </div>
               </div>
 
-              <div style={{ padding: "16px 20px" }}>
+              <div style={{ padding: isMobile ? "14px" : "16px 20px" }}>
                 <div style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
                   gap: "10px 20px",
                   marginBottom: 14,
                   fontSize: 13,
@@ -445,7 +518,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                     <strong style={{ color: DR, fontSize: 17 }}>{fmt(found.total)}</strong>
                   </div>
                   {found.payment_ref && (
-                    <div style={{ gridColumn: "1/-1" }}>
+                    <div style={{ gridColumn: "1/-1", wordBreak: "break-all" }}>
                       <span style={{ color: MUTED, fontWeight: 500 }}>Reference: </span>
                       <strong style={{ fontFamily: "monospace" }}>{found.payment_ref}</strong>
                     </div>
@@ -456,6 +529,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                       <strong>{found.processed_by}</strong>
                       {found.approved && (
                         <span style={{
+                          display: "inline-block",
                           marginLeft: 10,
                           padding: "2px 8px",
                           background: "#FEF3C7",
@@ -490,17 +564,18 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                     <span>Item</span>
                     <span>Amount</span>
                   </div>
-                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                  <div style={{ maxHeight: 220, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
                     {found.items.map((item, i) => (
                       <div key={i} style={{
                         display: "flex",
                         justifyContent: "space-between",
+                        gap: 10,
                         fontSize: 13,
-                        padding: "4px 0",
+                        padding: "5px 0",
                         borderBottom: i < found.items.length - 1 ? `1px solid ${BORDER}` : "none",
                       }}>
-                        <span>{item.name} <span style={{ color: MUTED, fontSize: 11 }}>×{item.qty}</span></span>
-                        <span style={{ fontWeight: 600 }}>{fmt(item.price * item.qty)}</span>
+                        <span style={{ minWidth: 0 }}>{item.name} <span style={{ color: MUTED, fontSize: 11 }}>×{item.qty}</span></span>
+                        <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>{fmt(item.price * item.qty)}</span>
                       </div>
                     ))}
                   </div>
@@ -509,9 +584,10 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
 
               {found.status === "completed" && !action && (
                 <div style={{
-                  padding: "14px 20px",
+                  padding: isMobile ? "14px" : "14px 20px",
                   borderTop: `2px solid ${BORDER}`,
                   display: "flex",
+                  flexDirection: isMobile ? "column" : "row",
                   gap: 10,
                   background: SUBTLE,
                 }}>
@@ -519,14 +595,14 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                     variant="outline"
                     onClick={() => { setAction("voided");
                       setError(""); }}
-                    style={{ flex: 1, padding: "10px", borderRadius: 6, fontWeight: 700, fontSize: 13 }}
+                    style={{ flex: 1, padding: "12px", borderRadius: 6, fontWeight: 700, fontSize: 13, minHeight: 44 }}
                   >
                     🚫 Void Order
                   </Btn>
                   <Btn
                     onClick={() => { setAction("refunded");
                       setError(""); }}
-                    style={{ flex: 1, padding: "10px", borderRadius: 6, fontWeight: 700, fontSize: 13 }}
+                    style={{ flex: 1, padding: "12px", borderRadius: 6, fontWeight: 700, fontSize: 13, minHeight: 44 }}
                   >
                     💳 Process Refund
                   </Btn>
@@ -547,12 +623,12 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
 
               {action && (
                 <div style={{
-                  padding: "16px 20px",
+                  padding: isMobile ? "14px" : "16px 20px",
                   borderTop: `2px solid ${BORDER}`,
                   background: SUBTLE,
                 }}>
                   <div style={{
-                    padding: "12px 16px",
+                    padding: "12px 14px",
                     background: action === "voided" ? DR_LIGHT : "#FFF7ED",
                     borderRadius: 6,
                     marginBottom: 14,
@@ -566,7 +642,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                     }}>
                       {action === "voided" ? "🚫 Void" : "💳 Refund"} Order {found.id}
                     </div>
-                    <div style={{ fontSize: 12, color: MUTED }}>
+                    <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.45 }}>
                       {action === "voided"
                         ? "This cancels the transaction permanently. It cannot be undone."
                         : `A refund of ${fmt(found.total)} will be issued to the customer.`}
@@ -590,7 +666,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                         placeholder="e.g. Maria Santos"
                         style={{
                           ...inputStyle,
-                          padding: "8px 12px",
+                          padding: "10px 12px",
                           borderRadius: 6,
                           border: `2px solid ${BORDER}`,
                           fontSize: 13,
@@ -616,7 +692,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                           ...inputStyle,
                           resize: "vertical",
                           minHeight: 70,
-                          padding: "8px 12px",
+                          padding: "10px 12px",
                           borderRadius: 6,
                           border: `2px solid ${BORDER}`,
                           fontSize: 13,
@@ -627,7 +703,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
 
                   {requiresApproval && (
                     <div style={{
-                      padding: "12px 16px",
+                      padding: "12px 14px",
                       background: "#FEF3C7",
                       borderRadius: 6,
                       marginTop: 14,
@@ -639,21 +715,24 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                         color: "#92400E",
                         marginBottom: 8,
                         display: "flex",
-                        alignItems: "center",
+                        alignItems: "flex-start",
                         gap: 6,
+                        lineHeight: 1.45,
                       }}>
-                        <span>🔒</span> Manager approval required — this {action} is {fmt(found.total)}, at or above the {fmt(APPROVAL_THRESHOLD)} threshold.
+                        <span>🔒</span>
+                        <span>Manager approval required — this {action} is {fmt(found.total)}, at or above the {fmt(APPROVAL_THRESHOLD)} threshold.</span>
                       </div>
                       <input
                         type="password"
+                        inputMode="numeric"
                         value={pin}
                         onChange={e => { setPin(e.target.value);
                           setPinError(""); }}
                         placeholder="Manager PIN"
                         style={{
                           ...inputStyle,
-                          maxWidth: 200,
-                          padding: "8px 12px",
+                          maxWidth: isMobile ? "100%" : 200,
+                          padding: "10px 12px",
                           borderRadius: 6,
                           border: `2px solid ${BORDER}`,
                           fontSize: 13,
@@ -689,7 +768,12 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                       ⚡ Demo mode — no real changes saved to Supabase.
                     </p>
                   )}
-                  <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+                  <div style={{
+                    display: "flex",
+                    flexDirection: isMobile ? "column-reverse" : "row",
+                    gap: 10,
+                    marginTop: 14,
+                  }}>
                     <Btn
                       variant="ghost"
                       onClick={() => {
@@ -700,7 +784,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                         setPinError("");
                         setError("");
                       }}
-                      style={{ flex: 1, padding: "10px", borderRadius: 6 }}
+                      style={{ flex: 1, padding: "12px", borderRadius: 6, minHeight: 44 }}
                     >
                       Cancel
                     </Btn>
@@ -709,9 +793,10 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                       disabled={loading}
                       style={{
                         flex: 2,
-                        padding: "10px",
+                        padding: "12px",
                         borderRadius: 6,
                         fontWeight: 700,
+                        minHeight: 44,
                         background: action === "refunded" ? "#7C2D12" : DR,
                       }}
                     >
@@ -743,6 +828,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                 📋 Void & Refund History
               </div>
               <div style={{ fontSize: 11, color: MUTED }}>
+                {history.length} {history.length === 1 ? "record" : "records"}
               </div>
             </div>
 
@@ -750,14 +836,13 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
             <div style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: 6,
+              gap: 8,
               marginBottom: 14,
-              padding: "12px 14px",
+              padding: "12px 12px",
               background: SUBTLE,
               border: `1px solid ${BORDER}`,
               borderRadius: 8,
               alignItems: "center",
-              justifyContent: "center",
             }}>
               <input
                 value={fText}
@@ -765,9 +850,9 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                 placeholder="🔍 Search ID, reason, staff…"
                 style={{
                   ...inputStyle,
-                  flex: "1 1 160px",
-                  minWidth: 120,
-                  padding: "6px 10px",
+                  flex: "1 1 100%",
+                  minWidth: 0,
+                  padding: "8px 10px",
                   borderRadius: 4,
                   border: `1px solid ${BORDER}`,
                   fontSize: 12,
@@ -775,8 +860,9 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
               />
               <select value={fStatus} onChange={e => setFStatus(e.target.value)} style={{
                 ...inputStyle,
-                flex: "0 1 120px",
-                padding: "6px 10px",
+                flex: "1 1 140px",
+                minWidth: 0,
+                padding: "8px 10px",
                 borderRadius: 4,
                 border: `1px solid ${BORDER}`,
                 fontSize: 12,
@@ -787,8 +873,9 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
               </select>
               <select value={fType} onChange={e => setFType(e.target.value)} style={{
                 ...inputStyle,
-                flex: "0 1 120px",
-                padding: "6px 10px",
+                flex: "1 1 140px",
+                minWidth: 0,
+                padding: "8px 10px",
                 borderRadius: 4,
                 border: `1px solid ${BORDER}`,
                 fontSize: 12,
@@ -798,8 +885,9 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
               </select>
               <select value={fPayment} onChange={e => setFPayment(e.target.value)} style={{
                 ...inputStyle,
-                flex: "0 1 130px",
-                padding: "6px 10px",
+                flex: "1 1 140px",
+                minWidth: 0,
+                padding: "8px 10px",
                 borderRadius: 4,
                 border: `1px solid ${BORDER}`,
                 fontSize: 12,
@@ -809,30 +897,34 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
               </select>
               <input type="date" value={fFrom} onChange={e => setFFrom(e.target.value)} style={{
                 ...inputStyle,
-                flex: "0 1 130px",
-                padding: "6px 10px",
+                flex: "1 1 140px",
+                minWidth: 0,
+                padding: "8px 10px",
                 borderRadius: 4,
                 border: `1px solid ${BORDER}`,
                 fontSize: 12,
               }} />
               <input type="date" value={fTo} onChange={e => setFTo(e.target.value)} style={{
                 ...inputStyle,
-                flex: "0 1 130px",
-                padding: "6px 10px",
+                flex: "1 1 140px",
+                minWidth: 0,
+                padding: "8px 10px",
                 borderRadius: 4,
                 border: `1px solid ${BORDER}`,
                 fontSize: 12,
               }} />
               <Btn variant="ghost" onClick={clearFilters} style={{
-                padding: "6px 14px",
+                flex: isMobile ? "1 1 100%" : "0 0 auto",
+                padding: "9px 14px",
                 borderRadius: 4,
                 fontSize: 12,
+                minHeight: 40,
               }}>
                 ✕ Clear
               </Btn>
             </div>
 
-            {/* Table */}
+            {/* Results — cards on phones, table on larger screens */}
             {history.length === 0 ? (
               <div style={{
                 padding: "32px 20px",
@@ -845,8 +937,12 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                 <div style={{ fontSize: 40, marginBottom: 10 }}>📭</div>
                 No voided or refunded orders match these filters.
               </div>
+            ) : isMobile ? (
+              <div>
+                {history.map(o => <HistoryCard key={o.id} o={o} />)}
+              </div>
             ) : (
-              <div style={{
+              <div className="vr-scroll" style={{
                 border: `1px solid ${BORDER}`,
                 borderRadius: 8,
                 boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
@@ -860,102 +956,22 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                   minWidth: 650,
                 }}>
                   <thead>
-                    <tr style={{ 
-                      background: SUBTLE, 
-                      borderBottom: `2px solid ${BORDER}`,
-                      position: "sticky",
-                      top: 0,
-                      zIndex: 5,
-                    }}>
+                    <tr style={{ background: SUBTLE, borderBottom: `2px solid ${BORDER}` }}>
                       <SortHeader label="Order ID" sortKey="id" />
                       <SortHeader label="Date" sortKey="created_at" />
-                      <th style={{
-                        textAlign: "left",
-                        padding: "10px 14px",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: MUTED,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.8,
-                        borderBottom: `2px solid ${BORDER}`,
-                        position: "sticky",
-                        top: 0,
-                        background: SUBTLE,
-                        zIndex: 5,
-                      }}>Type</th>
-                      <th style={{
-                        textAlign: "left",
-                        padding: "10px 14px",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: MUTED,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.8,
-                        borderBottom: `2px solid ${BORDER}`,
-                        position: "sticky",
-                        top: 0,
-                        background: SUBTLE,
-                        zIndex: 5,
-                      }}>Payment</th>
+                      <th style={thBase}>Type</th>
+                      <th style={thBase}>Payment</th>
                       <SortHeader label="Total" sortKey="total" align="right" />
-                      <th style={{
-                        textAlign: "left",
-                        padding: "10px 14px",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: MUTED,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.8,
-                        borderBottom: `2px solid ${BORDER}`,
-                        position: "sticky",
-                        top: 0,
-                        background: SUBTLE,
-                        zIndex: 5,
-                      }}>Status</th>
-                      <th style={{
-                        textAlign: "left",
-                        padding: "10px 14px",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: MUTED,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.8,
-                        borderBottom: `2px solid ${BORDER}`,
-                        position: "sticky",
-                        top: 0,
-                        background: SUBTLE,
-                        zIndex: 5,
-                      }}>Reason</th>
-                      <th style={{
-                        textAlign: "left",
-                        padding: "10px 14px",
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: MUTED,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.8,
-                        borderBottom: `2px solid ${BORDER}`,
-                        position: "sticky",
-                        top: 0,
-                        background: SUBTLE,
-                        zIndex: 5,
-                      }}>Processed By</th>
+                      <th style={thBase}>Status</th>
+                      <th style={thBase}>Reason</th>
+                      <th style={thBase}>Processed By</th>
                     </tr>
                   </thead>
                   <tbody>
                     {history.map(o => (
                       <tr
                         key={o.id}
-                        onClick={() => {
-                          setSearch(o.id);
-                          setFound(o);
-                          setSuccess("");
-                          setError("");
-                          setAction(null);
-                          setStaffName("");
-                          setPin("");
-                          setPinError("");
-                        }}
+                        onClick={() => openOrder(o)}
                         style={{
                           borderBottom: `1px solid ${BORDER}`,
                           cursor: "pointer",
@@ -1001,6 +1017,7 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                           textAlign: "right",
                           fontWeight: 700,
                           fontSize: 12,
+                          whiteSpace: "nowrap",
                         }}>{fmt(o.total)}</td>
                         <td style={{ padding: "10px 14px" }}>
                           <Badge status={o.status} />
@@ -1037,17 +1054,6 @@ export default function VoidRefundView({ orders, setOrders, config, demoMode }) 
                 </table>
               </div>
             )}
-            <div style={{
-              marginTop: 10,
-              fontSize: 11,
-              color: MUTED,
-              display: "flex",
-              justifyContent: "space-between",
-              flexWrap: "wrap",
-              gap: 6,
-            }}>
-
-            </div>
           </div>
         </div>
       </div>
