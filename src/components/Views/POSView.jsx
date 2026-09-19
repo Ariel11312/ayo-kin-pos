@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { Html5Qrcode } from "html5-qrcode";
 import { BG, BORDER, DR, DR_LIGHT, FONT, inputStyle, MUTED, SUBTLE, TEXT } from "../../ui/styles";
 import fmt from "../../function/fmt";
 import { ErrBox } from "../../function/messageBox";
@@ -46,8 +47,14 @@ const WARNING_BG = "#FEF3CD";
 const DANGER     = "#C0392B";
 const DANGER_BG  = "#FDECEA";
 
+// Items sold by "load" are services (wash/dry/fold, delivery tiers, etc.),
+// not physical inventory. Some rows still have a numeric `stock` value left
+// over in the DB (often 0), so unit alone — not just `stock == null` — has
+// to decide whether an item is stock-tracked.
+const isTracked = (item) => !!item && item.unit !== "load" && item.stock != null;
+
 const getStockStatus = (item) => {
-  if (item.stock == null) return null; // stock not tracked for this item
+  if (!isTracked(item)) return null; // service item or stock not tracked
   // Coerce to Number: numeric/decimal Postgres columns come back as strings
   // via supabase-js, and strict equality (===) won't coerce "0" to 0.
   const stock   = Number(item.stock ?? 0);
@@ -56,6 +63,9 @@ const getStockStatus = (item) => {
   if (stock <= reorder) return "low";
   return "ok";
 };
+
+// Short label shown on a menu/cart line, e.g. "per load", "per piece".
+const unitLabel = (unit) => (unit ? `per ${unit}` : null);
 
 /* ─────────────────────────────────────────────
    Responsive helper
@@ -229,6 +239,81 @@ function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
+   Promo QR Scan Modal
+   Opens the device camera and reads a QR code
+   whose payload is just the raw promo code text
+   (this is what PromoView's QR encodes).
+───────────────────────────────────────────── */
+function PromoScanModal({ onDetected, onClose, isMobile }) {
+  const regionId = "promo-qr-region";
+  const scannerRef = useRef(null);
+  const [err, setErr] = useState("");
+  const [starting, setStarting] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const html5Qr = new Html5Qrcode(regionId);
+    scannerRef.current = html5Qr;
+
+    html5Qr
+      .start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: 220 },
+        (decodedText) => {
+          if (cancelled) return;
+          cancelled = true;
+          html5Qr.stop().then(() => html5Qr.clear()).catch(() => {});
+          onDetected(decodedText.trim());
+        },
+        () => {} // per-frame "no QR found yet" — ignore
+      )
+      .then(() => { if (!cancelled) setStarting(false); })
+      .catch((e) => {
+        if (!cancelled) setErr("Camera unavailable: " + (e?.message || String(e)));
+      });
+
+    return () => {
+      cancelled = true;
+      html5Qr.stop().then(() => html5Qr.clear()).catch(() => {});
+    };
+  }, [onDetected]);
+
+  const overlay = {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    zIndex: 9999, fontFamily: FONT, padding: 16,
+  };
+
+  const box = {
+    background: BG, borderRadius: 12, padding: 18,
+    width: isMobile ? "100%" : 380, maxWidth: "100%",
+    boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
+    boxSizing: "border-box",
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={box} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>Scan promo QR</div>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
+          Point the camera at the customer's promo code.
+        </div>
+        <div id={regionId} style={{ width: "100%", minHeight: 240, borderRadius: 8, overflow: "hidden", background: "#000" }} />
+        {starting && !err && (
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>Starting camera…</div>
+        )}
+        {err && (
+          <div style={{ fontSize: 12, color: "#e53e3e", marginTop: 10, fontWeight: 600 }}>⚠ {err}</div>
+        )}
+        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
    Main POS View
 ───────────────────────────────────────────── */
 export default function POSView({ categories, items, setItems, orders, setOrders, config, demoMode }) {
@@ -238,14 +323,16 @@ export default function POSView({ categories, items, setItems, orders, setOrders
 
   // Restore persisted cart state on mount (lazy initializers run once, before first paint)
   const [cart, setCart]                 = useState(() => loadCartState()?.cart ?? []);
-const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "pickup");
+  const [orderType, setOrderType]       = useState(() => loadCartState()?.orderType ?? "pickup");
   const [tableNo, setTableNo]           = useState(() => loadCartState()?.tableNo ?? "");
   const [deliveryAddr, setDeliveryAddr] = useState(() => loadCartState()?.deliveryAddr ?? "");
   const [discount, setDiscount]         = useState(() => loadCartState()?.discount ?? "");
   const [discountType, setDiscountType] = useState(() => loadCartState()?.discountType ?? "none");
   const [discountInfo, setDiscountInfo] = useState(() => loadCartState()?.discountInfo ?? null);
+  const [promo, setPromo]               = useState(() => loadCartState()?.promo ?? null);
 
   const [pendingDiscType, setPendingDiscType] = useState(null);
+  const [promoInput, setPromoInput] = useState("");
   const [searchQ, setSearchQ] = useState("");
   const [modal, setModal] = useState(null);
   const [receipt, setReceipt] = useState(null);
@@ -258,8 +345,8 @@ const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "
 
   // Persist cart-related state on every change
   useEffect(() => {
-    saveCartState({ cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo });
-  }, [cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo]);
+    saveCartState({ cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo, promo });
+  }, [cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo, promo]);
 
   // Leaving mobile width while the sheet is open would otherwise strand it open.
   useEffect(() => {
@@ -288,6 +375,7 @@ const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "
 
   const addToCart = (item) => {
     const status = getStockStatus(item);
+    const tracked = isTracked(item);
     const currentQtyInCart = cart.find(c => c.id === item.id)?.qty ?? 0;
 
     if (status === "out") {
@@ -301,7 +389,7 @@ const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "
       return [...prev, { ...item, qty: 1 }];
     });
 
-    if (item.stock != null && currentQtyInCart + 1 > Number(item.stock)) {
+    if (tracked && currentQtyInCart + 1 > Number(item.stock)) {
       showToast(`${item.name}: cart now exceeds available stock (${Number(item.stock)} left)`, "err");
     } else if (status === "low") {
       showToast(`${item.name}: only ${Number(item.stock)} left in stock`, "warn");
@@ -316,6 +404,11 @@ const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "
 
   const discAmt = (() => {
     if (discountType === "custom") return Math.min(parseFloat(discount) || 0, subtotal);
+    if (discountType === "promo" && promo) {
+      return promo.discount_type === "percent"
+        ? Math.min(subtotal * (Number(promo.discount_value) / 100), subtotal)
+        : Math.min(Number(promo.discount_value), subtotal);
+    }
     const found = DISCOUNT_TYPES.find(d => d.key === discountType);
     return found?.rate ? Math.min(subtotal * found.rate, subtotal) : 0;
   })();
@@ -323,20 +416,22 @@ const [orderType, setOrderType] = useState(() => loadCartState()?.orderType ?? "
   const total = subtotal - discAmt;
 
   // Does any line in the cart exceed currently-known live stock?
+  // Service items (unit === "load", or stock not tracked) never count here.
   const hasOverstockedItem = cart.some(c => {
     const live = items.find(i => i.id === c.id);
-    return live?.stock != null && c.qty > Number(live.stock);
+    return isTracked(live) && c.qty > Number(live.stock);
   });
 
-const clearOrder = () => {
-  setCart([]); setOrderType("pickup"); setTableNo("");
-  setDeliveryAddr(""); setDiscount(""); setDiscountType("none");
-  setDiscountInfo(null); setError("");
-  saveCartState(null);
-};
+  const clearOrder = () => {
+    setCart([]); setOrderType("pickup"); setTableNo("");
+    setDeliveryAddr(""); setDiscount(""); setDiscountType("none");
+    setDiscountInfo(null); setPromo(null); setPromoInput(""); setError("");
+    saveCartState(null);
+  };
 
   /* When a discount button is clicked */
   const handleDiscountSelect = (d) => {
+    setPromo(null); // manual discount and promo code are mutually exclusive
     if (d.key === "pwd" || d.key === "senior") {
       // If already confirmed for this type, just toggle off
       if (discountType === d.key) {
@@ -365,6 +460,35 @@ const clearOrder = () => {
     setModal(null);
   };
 
+  /* Look up a promo code (typed or scanned) and, if valid, apply it. */
+  const applyPromoCode = async (codeRaw) => {
+    const code = (codeRaw || "").trim().toUpperCase();
+    setModal(null); // close scanner if it was open
+    if (!code) return;
+
+    const { data, error } = await supabase
+      .from("promo_codes")
+      .select("*")
+      .eq("code", code)
+      .maybeSingle();
+
+    if (error || !data) { showToast(`Promo "${code}" not found.`, "err"); return; }
+    if (!data.active) { showToast(`Promo "${code}" is inactive.`, "err"); return; }
+    if (data.expires_at && new Date(data.expires_at) < new Date()) {
+      showToast(`Promo "${code}" has expired.`, "err"); return;
+    }
+    if (data.max_uses != null && data.used_count >= data.max_uses) {
+      showToast(`Promo "${code}" has reached its usage limit.`, "err"); return;
+    }
+
+    setPromo(data);
+    setDiscountType("promo");
+    setDiscountInfo(null);
+    setDiscount("");
+    setPromoInput("");
+    showToast(`Promo "${code}" applied.`, "warn");
+  };
+
   const handlePaid = async (method, ref) => {
     setLoading(true); setError("");
     try {
@@ -374,17 +498,23 @@ const clearOrder = () => {
         subtotal, discount: discAmt, total, status: "completed",
         payment_method: method, payment_ref: ref, created_at: ts(),
         discount_type: discountType,
-        discount_info: discountInfo ?? null,
+        discount_info: discountType === "promo" && promo
+          ? { code: promo.code, label: promo.label }
+          : (discountInfo ?? null),
       };
       const { error } = await supabase.from("orders").insert(order);
       if (error) throw new Error(error.message);
 
-      // Decrement stock for every item sold. Writing this update to
-      // menu_items is what triggers Supabase Realtime — StockView (and any
-      // other open screen) picks up the new stock automatically.
+      // Decrement stock only for physical, stock-tracked items. "load"
+      // (service) items never touch menu_items.stock, even if the row still
+      // has a leftover numeric value there.
+      //
+      // Writing this update to menu_items is what triggers Supabase Realtime
+      // — StockView (and any other open screen) picks up the new stock
+      // automatically.
       const stockResults = await Promise.all(
         cart
-          .filter(c => items.find(i => i.id === c.id)?.stock != null) // only tracked items
+          .filter(c => isTracked(items.find(i => i.id === c.id)))
           .map(c => {
             const current = Number(items.find(i => i.id === c.id)?.stock ?? 0);
             const newStock = Math.max(0, current - c.qty);
@@ -394,10 +524,17 @@ const clearOrder = () => {
       const stockErr = stockResults.find(r => r.error);
       if (stockErr) throw new Error(stockErr.error.message);
 
+      // Promo code redeemed — bump its usage counter.
+      if (discountType === "promo" && promo) {
+        await supabase.from("promo_codes")
+          .update({ used_count: (Number(promo.used_count) || 0) + 1 })
+          .eq("id", promo.id);
+      }
+
       // Reflect the new stock locally so POS UI doesn't wait on a refetch
       setItems(prev => prev.map(i => {
         const sold = cart.find(c => c.id === i.id);
-        if (!sold || i.stock == null) return i;
+        if (!sold || !isTracked(i)) return i;
         return { ...i, stock: Math.max(0, Number(i.stock) - sold.qty) };
       }));
 
@@ -433,24 +570,24 @@ const clearOrder = () => {
     <>
       {/* Order type */}
       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-  <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-    {["pickup", "drop off", "delivery"].map(t => (
-      <button key={t} onClick={() => setOrderType(t)}
-        style={{
-          flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
-          cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
-          textTransform: "capitalize", touchAction: "manipulation",
-          background: orderType === t ? DR : SUBTLE, color: orderType === t ? "#fff" : MUTED,
-        }}>
-        {t}
-      </button>
-    ))}
-  </div>
-  {orderType === "delivery" && (
-    <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
-      style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
-  )}
-</div>
+        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+          {["pickup", "drop off", "delivery"].map(t => (
+            <button key={t} onClick={() => setOrderType(t)}
+              style={{
+                flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
+                cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
+                textTransform: "capitalize", touchAction: "manipulation",
+                background: orderType === t ? DR : SUBTLE, color: orderType === t ? "#fff" : MUTED,
+              }}>
+              {t}
+            </button>
+          ))}
+        </div>
+        {orderType === "delivery" && (
+          <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
+            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+        )}
+      </div>
 
       {/* Cart items */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "10px 14px" }}>
@@ -462,8 +599,8 @@ const clearOrder = () => {
           </div>
         ) : cart.map(c => {
           const liveItem = items.find(i => i.id === c.id); // realtime-updated stock
-          const liveStock = liveItem?.stock != null ? Number(liveItem.stock) : null;
-          const overStock = liveStock != null && c.qty > liveStock;
+          const overStock = isTracked(liveItem) && c.qty > Number(liveItem.stock);
+          const uLabel = unitLabel(c.unit);
           return (
             <div key={c.id} style={{ display: "flex", flexDirection: "column", padding: "10px 0", borderBottom: `1px solid ${BORDER}` }}>
               {/* Mobile stacks name above the stepper so long names never squeeze the controls */}
@@ -474,7 +611,9 @@ const clearOrder = () => {
                     whiteSpace: isMobile ? "normal" : "nowrap",
                     overflow: "hidden", textOverflow: "ellipsis",
                   }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: MUTED }}>{fmt(c.price)} each</div>
+                  <div style={{ fontSize: 11, color: MUTED }}>
+                    {fmt(c.price)}{uLabel ? ` / ${c.unit}` : " each"}
+                  </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: isMobile ? 0 : 8 }}>
                   <button onClick={() => updateQty(c.id, -1)} aria-label={`Remove one ${c.name}`} style={qtyBtnStyle}>−</button>
@@ -488,7 +627,7 @@ const clearOrder = () => {
               </div>
               {overStock && (
                 <div style={{ fontSize: 11, color: DANGER, fontWeight: 700, marginTop: 4 }}>
-                  ⚠ Only {liveStock} in stock — {c.qty - liveStock} over
+                  ⚠ Only {Number(liveItem.stock)} in stock — {c.qty - Number(liveItem.stock)} over
                 </div>
               )}
             </div>
@@ -561,11 +700,51 @@ const clearOrder = () => {
           </div>
         )}
 
+        {/* Promo code: type it or scan its QR */}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 6, letterSpacing: 0.3 }}>Promo code</div>
+          {discountType === "promo" && promo ? (
+            <div style={{
+              background: DR_LIGHT, border: `1px solid ${DR}`, borderRadius: 8,
+              padding: "8px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+            }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 800, color: DR, fontSize: 12 }}>🎟️ {promo.code}</div>
+                <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{promo.label}</div>
+              </div>
+              <button
+                onClick={() => { setDiscountType("none"); setPromo(null); }}
+                style={{ background: "none", border: "none", color: DR, fontSize: 11, fontWeight: 700,
+                  cursor: "pointer", fontFamily: FONT, flexShrink: 0, padding: isMobile ? "6px 0" : 0 }}>
+                ✕ Remove
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                value={promoInput}
+                onChange={e => setPromoInput(e.target.value.toUpperCase())}
+                onKeyDown={e => { if (e.key === "Enter") applyPromoCode(promoInput); }}
+                placeholder="Enter code"
+                style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
+                  fontSize: noZoomFont(isMobile), padding: isMobile ? "10px 12px" : "6px 8px" }}
+              />
+              <Btn variant="ghost" onClick={() => applyPromoCode(promoInput)}
+                style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }}>Apply</Btn>
+              <Btn variant="ghost" onClick={() => setModal("scanPromo")}
+                style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }} aria-label="Scan promo QR">📷</Btn>
+            </div>
+          )}
+        </div>
+
         {/* Discount line */}
         {discAmt > 0 && (
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 13 }}>
             <span style={{ color: DR, fontWeight: 600 }}>
-              {discountType === "pwd" ? "PWD (20%)" : discountType === "senior" ? "Senior Citizen (20%)" : "Discount"}
+              {discountType === "pwd" ? "PWD (20%)"
+                : discountType === "senior" ? "Senior Citizen (20%)"
+                : discountType === "promo" && promo ? `Promo (${promo.code})`
+                : "Discount"}
             </span>
             <span style={{ color: DR, fontWeight: 700 }}>− {fmt(discAmt)}</span>
           </div>
@@ -651,6 +830,7 @@ const clearOrder = () => {
           {filtered.map(item => {
             const status = getStockStatus(item);
             const isOut = status === "out";
+            const uLabel = unitLabel(item.unit);
             return (
               <button key={item.id} onClick={() => addToCart(item)}
                 disabled={isOut}
@@ -666,7 +846,12 @@ const clearOrder = () => {
                 onMouseEnter={e => { if (!isOut && !isMobile) { e.currentTarget.style.borderColor = DR; e.currentTarget.style.background = DR_LIGHT; } }}
                 onMouseLeave={e => { if (!isOut && !isMobile) { e.currentTarget.style.borderColor = BORDER; e.currentTarget.style.background = BG; } }}>
                 <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6, lineHeight: 1.3, color: TEXT, wordBreak: "break-word" }}>{item.name}</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: DR }}>{fmt(item.price)}</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 5, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: DR }}>{fmt(item.price)}</div>
+                  {uLabel && (
+                    <div style={{ fontSize: 10, fontWeight: 600, color: MUTED }}>{uLabel}</div>
+                  )}
+                </div>
                 <div style={{ fontSize: 10, color: MUTED, marginTop: 5 }}>{categories.find(c => c.id === item.category_id)?.name}</div>
                 {status === "low" && (
                   <div style={{ fontSize: 10, fontWeight: 700, color: WARNING, background: WARNING_BG, borderRadius: 4, padding: "2px 6px", marginTop: 6, display: "inline-block" }}>
@@ -760,6 +945,13 @@ const clearOrder = () => {
           isMobile={isMobile}
           onConfirm={handleDiscountInfoConfirm}
           onClose={handleDiscountInfoClose}
+        />
+      )}
+      {modal === "scanPromo" && (
+        <PromoScanModal
+          isMobile={isMobile}
+          onClose={() => setModal(null)}
+          onDetected={(text) => applyPromoCode(text)}
         />
       )}
       {modal === "payment" && (

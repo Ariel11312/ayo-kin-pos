@@ -276,7 +276,7 @@ export default function MenuView({ categories, setCategories, items, setItems, c
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
                 <tr style={{ background: SUBTLE }}>
-                  {["Item Name", "Category", "Price", "Available", ""].map((h, i) => (
+                  {["Item Name", "Category", "Unit", "Price", "Available", ""].map((h, i) => (
                     <th key={i} style={{ padding: "10px 14px", textAlign: i >= 2 ? "center" : "left", fontWeight: 700, color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
                   ))}
                 </tr>
@@ -286,6 +286,7 @@ export default function MenuView({ categories, setCategories, items, setItems, c
                   <tr key={item.id} style={{ borderTop: `1px solid ${BORDER}`, background: idx % 2 === 0 ? BG : "#FAFAFA" }}>
                     <td style={{ padding: "10px 14px", fontWeight: 700 }}>{item.name}</td>
                     <td style={{ padding: "10px 14px", color: MUTED }}>{categories.find(c => c.id === item.category_id)?.name || "—"}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "center", color: MUTED, textTransform: "capitalize" }}>{item.unit || "—"}</td>
                     <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, color: DR }}>{fmt(item.price)}</td>
                     <td style={{ padding: "10px 14px", textAlign: "center" }}>
                       <button onClick={() => toggleAvail(item)} style={availPill(item)}>

@@ -5,7 +5,7 @@ const INIT_ITEMS = [];
 export async function getItems() {
   const { data, error } = await supabase
     .from("menu_items")
-    .select("id, name, category_id, price, available, stock, reorder")
+    .select("id, name, category_id, price, available, stock, reorder, unit")
     .order("name", { ascending: true });
 
   if (error) {

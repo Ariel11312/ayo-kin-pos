@@ -14,6 +14,8 @@ const WARNING_BG= "#FEF3CD";
 const INFO      = "#185FA5";
 const INFO_BG   = "#E8F1FB";
 const CARD_BG   = "#F7F7F7";
+const NEUTRAL   = "#6B7280";
+const NEUTRAL_BG= "#EEF0F2";
 
 const REORDER_REASONS = [
   "Delivery received",
@@ -24,7 +26,15 @@ const REORDER_REASONS = [
 ];
 
 /* ─── helpers ─── */
+// Items sold "per load" (wash/dry/fold, delivery tiers, etc.) are services,
+// not physical inventory — they never go "out of stock" no matter what's
+// sitting in the `stock` column.
+function isTracked(item) {
+  return !!item && item.unit !== "load";
+}
+
 function getStatus(item) {
+  if (!isTracked(item)) return null; // service item — stock not applicable
   const stock   = item.stock   ?? 0;
   const reorder = item.reorder ?? 3;
   if (stock === 0)      return "out";
@@ -34,6 +44,13 @@ function getStatus(item) {
 
 function StatusBadge({ item }) {
   const s = getStatus(item);
+  if (s === null) {
+    return (
+      <span style={{ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 20, background: NEUTRAL_BG, color: NEUTRAL }}>
+        Service
+      </span>
+    );
+  }
   const map = {
     ok:  { label: "In stock",     color: SUCCESS,  bg: SUCCESS_BG },
     low: { label: "Low stock",    color: WARNING,  bg: WARNING_BG },
@@ -48,6 +65,7 @@ function StatusBadge({ item }) {
 }
 
 function StockBar({ item }) {
+  if (!isTracked(item)) return null; // services have no meaningful stock level
   const max   = Math.max(item.stock ?? 0, (item.reorder ?? 3) * 4, 10);
   const pct   = Math.min(100, Math.round(((item.stock ?? 0) / max) * 100));
   const s     = getStatus(item);
@@ -192,7 +210,7 @@ export default function StockView({ demoMode }) {
     try {
       const { data, error: err } = await supabase
         .from("menu_items")
-        .select("id, name, category_id, price, available, stock, reorder")
+        .select("id, name, category_id, price, available, stock, reorder, unit")
         .order("name");
       if (err) throw err;
       setItems(data || []);
@@ -271,7 +289,8 @@ export default function StockView({ demoMode }) {
   }
 
   function openRestock() {
-    setRsItem(items[0]?.id ?? "");
+    const firstTracked = items.find(isTracked) ?? items[0];
+    setRsItem(firstTracked?.id ?? "");
     setRsQty(10);
     setRsReason(REORDER_REASONS[0]);
     setModal("restock");
@@ -318,8 +337,8 @@ export default function StockView({ demoMode }) {
     let list = [...items];
     const q = search.toLowerCase();
     if (q) list = list.filter(i => i.name?.toLowerCase().includes(q) || i.category_id?.toLowerCase().includes(q));
-    if (filter === "out") list = list.filter(i => (i.stock ?? 0) === 0);
-    if (filter === "low") list = list.filter(i => (i.stock ?? 0) > 0 && (i.stock ?? 0) <= (i.reorder ?? 3));
+    if (filter === "out") list = list.filter(i => isTracked(i) && (i.stock ?? 0) === 0);
+    if (filter === "low") list = list.filter(i => isTracked(i) && (i.stock ?? 0) > 0 && (i.stock ?? 0) <= (i.reorder ?? 3));
     list.sort((a, b) => {
       let av = a[sortKey] ?? "", bv = b[sortKey] ?? "";
       if (typeof av === "string") av = av.toLowerCase();
@@ -331,10 +350,15 @@ export default function StockView({ demoMode }) {
     return list;
   }, [items, search, filter, sortKey, sortDir]);
 
+  // Only physically stock-tracked items (unit !== "load") count toward
+  // out-of-stock / low-stock / inventory-value totals. Service items are
+  // still counted in Total SKUs.
   const totalItems = items.length;
-  const outCount   = items.filter(i => (i.stock ?? 0) === 0).length;
-  const lowCount   = items.filter(i => (i.stock ?? 0) > 0 && (i.stock ?? 0) <= (i.reorder ?? 3)).length;
-  const invValue   = items.reduce((s, i) => s + (i.stock ?? 0) * (i.price ?? 0), 0);
+  const trackedItems = items.filter(isTracked);
+  const serviceCount = totalItems - trackedItems.length;
+  const outCount   = trackedItems.filter(i => (i.stock ?? 0) === 0).length;
+  const lowCount   = trackedItems.filter(i => (i.stock ?? 0) > 0 && (i.stock ?? 0) <= (i.reorder ?? 3)).length;
+  const invValue   = trackedItems.reduce((s, i) => s + (i.stock ?? 0) * (i.price ?? 0), 0);
 
   /* ══ RENDER ══ */
   if (loading) return (
@@ -359,16 +383,17 @@ export default function StockView({ demoMode }) {
       fontFamily: FONT, background: BG, overflow: "hidden",
     }}>
 
-      {/* stat bar — 2×2 on phones */}
+      {/* stat bar — 2×2 (+1) on phones, 5-up on desktop */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
+        gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(5, 1fr)",
         gap: 10, padding: isMobile ? "12px 14px 8px" : "14px 20px 10px", flexShrink: 0,
       }}>
-        <StatCard isMobile={isMobile} label="Total SKUs"      value={totalItems}    sub={`${totalItems - outCount - lowCount} healthy`} />
+        <StatCard isMobile={isMobile} label="Total SKUs"      value={totalItems}    sub={`${trackedItems.length - outCount - lowCount} healthy`} />
         <StatCard isMobile={isMobile} label="Out of stock"    value={outCount}      sub="need restocking"    valueColor={outCount > 0 ? DANGER  : TEXT} />
         <StatCard isMobile={isMobile} label="Low stock"       value={lowCount}      sub="at / below reorder" valueColor={lowCount > 0 ? WARNING : TEXT} />
         <StatCard isMobile={isMobile} label="Inventory value" value={fmt(invValue)} sub="at sell price" />
+        <StatCard isMobile={isMobile} label="Services"        value={serviceCount}  sub="per-load, not stock-tracked" valueColor={NEUTRAL} />
       </div>
 
       {/* toolbar */}
@@ -432,20 +457,31 @@ export default function StockView({ demoMode }) {
                       <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
                         <span style={{ padding: "2px 8px", borderRadius: 20, background: SUBTLE }}>{item.category_id || "—"}</span>
                         {"  ·  "}{fmt(item.price ?? 0)}
+                        {item.unit ? ` / ${item.unit}` : ""}
                       </div>
                     </div>
                     <StatusBadge item={item} />
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
-                    <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
-                    <span style={{ minWidth: 32, textAlign: "center", fontWeight: 800, fontSize: 16, color: TEXT }}>{item.stock ?? 0}</span>
-                    <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
-                    <span style={{ fontSize: 11, color: MUTED, marginLeft: 4 }}>reorder @ {item.reorder ?? 3}</span>
-                    <div style={{ flex: 1 }} />
-                    <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
-                  </div>
-                  <StockBar item={item} />
+                  {isTracked(item) ? (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+                        <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
+                        <span style={{ minWidth: 32, textAlign: "center", fontWeight: 800, fontSize: 16, color: TEXT }}>{item.stock ?? 0}</span>
+                        <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
+                        <span style={{ fontSize: 11, color: MUTED, marginLeft: 4 }}>reorder @ {item.reorder ?? 3}</span>
+                        <div style={{ flex: 1 }} />
+                        <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
+                      </div>
+                      <StockBar item={item} />
+                    </>
+                  ) : (
+                    <div style={{ display: "flex", alignItems: "center", marginTop: 12 }}>
+                      <span style={{ fontSize: 12, color: MUTED }}>Service item · stock not tracked</span>
+                      <div style={{ flex: 1 }} />
+                      <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
+                    </div>
+                  )}
 
                   <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 12 }}>
                     <span style={{ position: "relative", display: "inline-block", width: 38, height: 22, flexShrink: 0 }}>
@@ -496,6 +532,7 @@ export default function StockView({ demoMode }) {
                 const s = getStatus(item);
                 const leftBorder = s === "out" ? DANGER : s === "low" ? WARNING : "transparent";
                 const tdStyle = { padding: "10px 8px", borderBottom: `1px solid ${BORDER}` };
+                const tracked = isTracked(item);
                 return (
                   <tr key={item.id}>
                     <td style={{ ...tdStyle, borderLeft: `3px solid ${leftBorder}` }}>
@@ -509,15 +546,21 @@ export default function StockView({ demoMode }) {
                     </td>
                     <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: TEXT }}>{fmt(item.price ?? 0)}</td>
                     <td style={tdStyle}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
-                        <span style={{ minWidth: 28, textAlign: "center", fontWeight: 800, fontSize: 14, color: TEXT }}>{item.stock ?? 0}</span>
-                        <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
-                      </div>
-                      <StockBar item={item} />
+                      {tracked ? (
+                        <>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <button onClick={() => adjust(item, -1)} style={qtyBtn}>−</button>
+                            <span style={{ minWidth: 28, textAlign: "center", fontWeight: 800, fontSize: 14, color: TEXT }}>{item.stock ?? 0}</span>
+                            <button onClick={() => adjust(item, 1)} style={qtyBtn}>+</button>
+                          </div>
+                          <StockBar item={item} />
+                        </>
+                      ) : (
+                        <span style={{ fontSize: 12, color: MUTED }}>—</span>
+                      )}
                     </td>
                     <td style={tdStyle}><StatusBadge item={item} /></td>
-                    <td style={{ ...tdStyle, color: MUTED, fontWeight: 600 }}>{item.reorder ?? 3} units</td>
+                    <td style={{ ...tdStyle, color: MUTED, fontWeight: 600 }}>{tracked ? `${item.reorder ?? 3} units` : "—"}</td>
                     <td style={tdStyle}>
                       <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
                         <span style={{ position: "relative", display: "inline-block", width: 34, height: 20, flexShrink: 0 }}>
@@ -552,7 +595,11 @@ export default function StockView({ demoMode }) {
           <div style={rowStyle}>
             <label style={labelStyle}>Item</label>
             <select value={rsItem} onChange={e => setRsItem(e.target.value)} style={inputStyle}>
-              {items.map(i => <option key={i.id} value={i.id}>{i.name} (stock: {i.stock ?? 0})</option>)}
+              {items.map(i => (
+                <option key={i.id} value={i.id}>
+                  {i.name} {isTracked(i) ? `(stock: ${i.stock ?? 0})` : "(service — not stock-tracked)"}
+                </option>
+              ))}
             </select>
           </div>
           <div style={rowStyle}>
@@ -567,11 +614,19 @@ export default function StockView({ demoMode }) {
           </div>
           {rsItem && (() => {
             const found = items.find(i => i.id === rsItem);
-            return found ? (
+            if (!found) return null;
+            if (!isTracked(found)) {
+              return (
+                <div style={{ background: NEUTRAL_BG, borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: NEUTRAL }}>
+                  <strong>{found.name}</strong> is a service item (per {found.unit}) — restocking has no effect since it isn't stock-tracked.
+                </div>
+              );
+            }
+            return (
               <div style={{ background: INFO_BG, borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: INFO }}>
                 <strong>{found.name}</strong>: {found.stock ?? 0} → {(found.stock ?? 0) + Number(rsQty)} units
               </div>
-            ) : null;
+            );
           })()}
           <div style={{ display: "flex", gap: 8, justifyContent: isMobile ? "stretch" : "flex-end" }}>
             <button onClick={() => setModal(null)} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined, textAlign: "center" }}>Cancel</button>
@@ -586,9 +641,10 @@ export default function StockView({ demoMode }) {
         <ModalShell title={`Edit — ${editItem.name}`} onClose={() => setModal(null)} isMobile={isMobile}>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
             Category: <strong>{editItem.category_id || "—"}</strong> · ID: {editItem.id}
+            {!isTracked(editItem) && <> · <span style={{ color: NEUTRAL, fontWeight: 700 }}>Service item (not stock-tracked)</span></>}
           </div>
           <div style={rowStyle}>
-            <label style={labelStyle}>Stock (units)</label>
+            <label style={labelStyle}>Stock (units){!isTracked(editItem) ? " — not tracked for this item" : ""}</label>
             <input type="number" min={0} inputMode="numeric" value={edStock} onChange={e => setEdStock(e.target.value)} style={inputStyle} />
           </div>
           <div style={rowStyle}>
@@ -599,7 +655,7 @@ export default function StockView({ demoMode }) {
             <label style={labelStyle}>Price (₱)</label>
             <input type="number" min={0} inputMode="decimal" value={edPrice} onChange={e => setEdPrice(e.target.value)} style={inputStyle} />
           </div>
-          {Number(edStock) !== (editItem.stock ?? 0) && (
+          {isTracked(editItem) && Number(edStock) !== (editItem.stock ?? 0) && (
             <div style={{ background: WARNING_BG, borderRadius: 8, padding: "9px 13px", marginBottom: 14, fontSize: 12, color: WARNING }}>
               Stock will change from <strong>{editItem.stock ?? 0}</strong> → <strong>{edStock}</strong> units. This will be logged.
             </div>

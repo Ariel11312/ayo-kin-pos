@@ -20,6 +20,7 @@ import StockView from "./Views/StockView";
 import EmployeeTimeView from "./Views/EmplyeeTimeView";
 import CalendarView from "./Views/CalendarView";
 import ExpensesView from "./Views/ExpensesView";
+import PromoView from "./Views/PromoView";
 export default function App() {
   const navigate = useNavigate();
   const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
@@ -93,6 +94,7 @@ export default function App() {
     { key: "orders", emoji: "📦", label: "Orders" },
     { key: "stock", emoji: "🗃️", label: "Stock" },
     { key: "expenses", emoji: "💸", label: "expenses" },
+    { key: "promo", emoji: "🎟️", label: "Promo Codes" },
     { key: "statistics", emoji: "📈", label: "Statistics" },
     { key: "voidRefund", emoji: "↩", label: "Void / Refund" },
     { key: "timeClock", emoji: "🕒", label: "Time Clock" },
@@ -277,6 +279,7 @@ export default function App() {
             {view === "timeClock" && <EmployeeTimeView demoMode={demoMode} />}
             {view === "calendar" && <CalendarView demoMode={demoMode} />}
             {view === "expenses" && <ExpensesView demoMode={demoMode} />}
+            {view === "promo" && <PromoView />}
 
           </div>
         </div>
