@@ -343,6 +343,7 @@ export default function MenuView({ categories, setCategories, items, setItems, c
                 <option value="piece">Per Piece</option>
                 <option value="set">Per Set</option>
                 <option value="hour">Per Hour</option>
+                <option value="Cup">Per Cup</option>
               </select>
             </Field>
             <Field label={`Price (₱ per ${form.unit || "piece"})`}>
