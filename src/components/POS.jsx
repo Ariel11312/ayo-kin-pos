@@ -27,7 +27,7 @@ export default function App() {
   const [config, setConfig] = useState(() => {
     try { return JSON.parse(localStorage.getItem("pos_config") || "{}"); } catch { return {}; }
   });
-  const [demoMode, setDemoMode] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
   const [categories, setCategories] = useState([]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -202,7 +202,7 @@ export default function App() {
               <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5 }}>SalesPoint</div>
               {demoMode && (
                 <div style={{ marginTop: 8, display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.18)", padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
-                  ● Demo Mode
+                  ● Live Mode
                 </div>
               )}
             </div>
@@ -264,7 +264,7 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, color: MUTED, flexShrink: 0 }}>
               <span className="topbar-orders-label">{orders ? orders.length : 0} orders today</span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
-              <span style={{ fontWeight: 700, color: demoMode ? "#92400E" : SUCCESS }}>{demoMode ? "Demo Mode" : "Live"}</span>
+              <span style={{ fontWeight: 700, color: demoMode ? "#92400E" : SUCCESS }}>{demoMode ? "Live Mode" : "Live"}</span>
             </div>
           </div>
 

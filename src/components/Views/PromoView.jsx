@@ -21,6 +21,51 @@ function promoStatus(p) {
   return { label: "Active", color: SUCCESS, bg: SUCCESS_BG };
 }
 
+/* Responsive rules live here so the rest of the file can keep using plain
+   inline styles for colors/spacing while layout breakpoints are centralized. */
+function ResponsiveStyles() {
+  return (
+    <style>{`
+      .promo-root { -webkit-text-size-adjust: 100%; }
+      .promo-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) 1fr;
+        gap: 22px;
+        align-items: start;
+      }
+      @media (max-width: 860px) {
+        .promo-grid { grid-template-columns: 1fr; gap: 16px; }
+      }
+      .promo-two-col { display: flex; gap: 10px; margin-bottom: 14px; }
+      @media (max-width: 420px) {
+        .promo-two-col { flex-direction: column; gap: 14px; }
+      }
+      .promo-card-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 14px;
+      }
+      .promo-card {
+        display: flex;
+        gap: 14px;
+      }
+      @media (max-width: 380px) {
+        .promo-card { flex-direction: column; align-items: center; text-align: center; }
+      }
+      .promo-input, .promo-input * {
+        font-size: 16px !important; /* prevents iOS auto-zoom on focus */
+      }
+      .promo-tap-btn {
+        min-height: 40px;
+      }
+      @media (max-width: 480px) {
+        .promo-container { padding: 14px !important; }
+        .promo-form-box { padding: 14px !important; }
+      }
+    `}</style>
+  );
+}
+
 /* QR code encodes just the raw promo code text (e.g. "SAVE20"), which is
    exactly what the POSView scanner reads back and looks up. */
 function QRBlock({ code, onExpand }) {
@@ -53,7 +98,8 @@ function QRBlock({ code, onExpand }) {
         <QRCodeCanvas value={code} size={88} level="M" />
       </div>
       <button onClick={download}
-        style={{ fontSize: 10, fontWeight: 700, color: DR, background: "none", border: "none", cursor: "pointer", fontFamily: FONT }}>
+        className="promo-tap-btn"
+        style={{ fontSize: 12, fontWeight: 700, color: DR, background: "none", border: "none", cursor: "pointer", fontFamily: FONT, padding: "4px 8px" }}>
         ⬇ Download
       </button>
     </div>
@@ -64,11 +110,19 @@ function QRBlock({ code, onExpand }) {
    hold the screen up for a customer to scan, or to read it back. */
 function FullscreenQR({ promo, onClose }) {
   const wrapRef = useRef(null);
+  const [qrSize, setQrSize] = useState(() =>
+    typeof window !== "undefined" ? Math.min(320, window.innerWidth - 80) : 320
+  );
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const onResize = () => setQrSize(Math.min(320, window.innerWidth - 80));
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+    };
   }, [onClose]);
 
   const download = () => {
@@ -91,7 +145,7 @@ function FullscreenQR({ promo, onClose }) {
       }}>
       <div onClick={e => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, maxWidth: "100%" }}>
         <div ref={wrapRef} style={{ padding: 20, background: "#fff", borderRadius: 16, boxShadow: "0 10px 50px rgba(0,0,0,0.4)" }}>
-          <QRCodeCanvas value={promo.code} size={Math.min(320, window.innerWidth - 80)} level="M" />
+          <QRCodeCanvas value={promo.code} size={qrSize} level="M" />
         </div>
         <div style={{ textAlign: "center" }}>
           <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", letterSpacing: 1 }}>{promo.code}</div>
@@ -99,15 +153,15 @@ function FullscreenQR({ promo, onClose }) {
             {promo.label} · {promo.discount_type === "percent" ? `${promo.discount_value}% off` : `${fmt(promo.discount_value)} off`}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={download} style={{
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+          <button onClick={download} className="promo-tap-btn" style={{
             fontSize: 13, fontWeight: 700, color: "#fff", background: "rgba(255,255,255,0.15)",
-            border: "1px solid rgba(255,255,255,0.35)", borderRadius: 8, padding: "9px 18px",
+            border: "1px solid rgba(255,255,255,0.35)", borderRadius: 8, padding: "10px 18px",
             cursor: "pointer", fontFamily: FONT,
           }}>⬇ Download</button>
-          <button onClick={onClose} style={{
+          <button onClick={onClose} className="promo-tap-btn" style={{
             fontSize: 13, fontWeight: 700, color: "#fff", background: "rgba(255,255,255,0.15)",
-            border: "1px solid rgba(255,255,255,0.35)", borderRadius: 8, padding: "9px 18px",
+            border: "1px solid rgba(255,255,255,0.35)", borderRadius: 8, padding: "10px 18px",
             cursor: "pointer", fontFamily: FONT,
           }}>✕ Close</button>
         </div>
@@ -194,17 +248,18 @@ export default function PromoView() {
   const field = { marginBottom: 14 };
 
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: 22, fontFamily: FONT }}>
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 360px) 1fr", gap: 22, alignItems: "start" }}>
+    <div className="promo-root promo-container" style={{ height: "100%", overflowY: "auto", overflowX: "hidden", padding: 22, fontFamily: FONT, boxSizing: "border-box" }}>
+      <ResponsiveStyles />
+      <div className="promo-grid">
 
         {/* ── Create form ── */}
-        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18, background: BG }}>
+        <div className="promo-form-box" style={{ border: `1px solid ${BORDER}`, borderRadius: 12, padding: 18, background: BG, boxSizing: "border-box" }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: TEXT, marginBottom: 14 }}>🎟️ New Promo Code</div>
 
           <div style={field}>
             <label style={lbl}>Code</label>
             <div style={{ display: "flex", gap: 6 }}>
-              <input style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box" }} value={code}
+              <input className="promo-input" style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box" }} value={code}
                 onChange={e => setCode(e.target.value.toUpperCase())} placeholder="e.g. SAVE20" />
               <Btn variant="ghost" onClick={() => setCode(genCode())} style={{ flexShrink: 0, padding: "8px 12px" }}>🎲</Btn>
             </div>
@@ -212,7 +267,7 @@ export default function PromoView() {
 
           <div style={field}>
             <label style={lbl}>Label (optional)</label>
-            <input style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={label}
+            <input className="promo-input" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} value={label}
               onChange={e => setLabel(e.target.value)} placeholder="e.g. September promo" />
           </div>
 
@@ -221,8 +276,9 @@ export default function PromoView() {
             <div style={{ display: "flex", gap: 6 }}>
               {[{ k: "percent", l: "% Percent" }, { k: "fixed", l: "₱ Fixed" }].map(t => (
                 <button key={t.k} onClick={() => setDiscountType(t.k)}
+                  className="promo-tap-btn"
                   style={{
-                    flex: 1, padding: "8px 0", borderRadius: 6, border: "none", cursor: "pointer",
+                    flex: 1, padding: "10px 0", borderRadius: 6, border: "none", cursor: "pointer",
                     fontFamily: FONT, fontSize: 12, fontWeight: 700,
                     background: discountType === t.k ? DR : SUBTLE, color: discountType === t.k ? "#fff" : MUTED,
                   }}>{t.l}</button>
@@ -232,20 +288,20 @@ export default function PromoView() {
 
           <div style={field}>
             <label style={lbl}>{discountType === "percent" ? "Percent off" : "Amount off (₱)"}</label>
-            <input type="number" min="0" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+            <input type="number" min="0" inputMode="decimal" className="promo-input" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
               value={discountValue} onChange={e => setDiscountValue(e.target.value)}
               placeholder={discountType === "percent" ? "e.g. 20" : "e.g. 50"} />
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          <div className="promo-two-col">
             <div style={{ flex: 1, minWidth: 0 }}>
               <label style={lbl}>Max uses (optional)</label>
-              <input type="number" min="1" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+              <input type="number" min="1" inputMode="numeric" className="promo-input" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
                 value={maxUses} onChange={e => setMaxUses(e.target.value)} placeholder="Unlimited" />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <label style={lbl}>Expires (optional)</label>
-              <input type="date" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+              <input type="date" className="promo-input" style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
                 value={expiresAt} onChange={e => setExpiresAt(e.target.value)} />
             </div>
           </div>
@@ -267,16 +323,16 @@ export default function PromoView() {
               No promo codes yet. Create one to get a scannable QR code.
             </div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+            <div className="promo-card-list">
               {promos.map(p => {
                 const status = promoStatus(p);
                 return (
-                  <div key={p.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, display: "flex", gap: 14, background: BG }}>
+                  <div key={p.id} className="promo-card" style={{ border: `1px solid ${BORDER}`, borderRadius: 12, padding: 16, background: BG, boxSizing: "border-box" }}>
                     <QRBlock code={p.code} onExpand={() => setExpanded(p)} />
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-                        <div style={{ fontSize: 15, fontWeight: 800, color: TEXT }}>{p.code}</div>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: status.color, background: status.bg, padding: "2px 8px", borderRadius: 20 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap", justifyContent: "inherit" }}>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: TEXT, wordBreak: "break-word" }}>{p.code}</div>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: status.color, background: status.bg, padding: "2px 8px", borderRadius: 20, whiteSpace: "nowrap" }}>
                           {status.label}
                         </span>
                       </div>
@@ -288,14 +344,14 @@ export default function PromoView() {
                         <div>Used {p.used_count}{p.max_uses != null ? `/${p.max_uses}` : ""} time{p.used_count === 1 ? "" : "s"}</div>
                         {p.expires_at && <div>Expires {new Date(p.expires_at).toLocaleDateString()}</div>}
                       </div>
-                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <button onClick={() => toggleActive(p)} style={{
+                      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", justifyContent: "inherit" }}>
+                        <button onClick={() => toggleActive(p)} className="promo-tap-btn" style={{
                           fontSize: 11, fontWeight: 700, color: DR, background: "none", border: `1px solid ${DR}`,
-                          borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontFamily: FONT,
+                          borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontFamily: FONT,
                         }}>{p.active ? "Deactivate" : "Activate"}</button>
-                        <button onClick={() => removePromo(p)} style={{
+                        <button onClick={() => removePromo(p)} className="promo-tap-btn" style={{
                           fontSize: 11, fontWeight: 700, color: DANGER, background: "none", border: `1px solid ${DANGER}`,
-                          borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontFamily: FONT,
+                          borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontFamily: FONT,
                         }}>Delete</button>
                       </div>
                     </div>
