@@ -39,6 +39,28 @@ const fmtTime = (iso) => {
 // what was happening here.
 let qrScanInstanceCounter = 0;
 
+// Tracks the teardown of whichever QrScanModal instance was mounted most
+// recently. A new instance awaits this before touching the camera, so it
+// never races the previous instance for the device. Without this, closing
+// the scanner and reopening it quickly leaves the old `stop()` still
+// in flight when the new `start()` fires — on many browsers that means the
+// camera device is still locked, and the new `start()` promise just never
+// settles (neither resolves nor rejects), which is what an infinite
+// "Starting camera…" spinner looks like.
+let cameraReleaseChain = Promise.resolve();
+
+// A `start()` call that never settles is otherwise fatal to the UI — this
+// wraps any promise so it always resolves/rejects within `ms`, turning a
+// silent hang into a visible error.
+const withTimeout = (promise, ms, message) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+
 function QrScanModal({ onDetected, onClose, isMobile }) {
   const regionIdRef = useRef(`rider-scanner-qr-region-${++qrScanInstanceCounter}`);
   const regionId = regionIdRef.current;
@@ -49,60 +71,107 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
   // Stopping a scanner that never finished starting, or stopping/clearing
   // it twice, is what tends to throw. This helper makes teardown safe to
   // call from both the detection handler and the unmount cleanup without
-  // letting either throw escape uncaught.
+  // letting either throw escape uncaught. Returns a promise that resolves
+  // once the camera device has actually been released, so callers (see
+  // `cameraReleaseChain` below) can wait on it.
   const safeTeardown = (html5Qr) => {
+    let resolveDone;
+    const done = new Promise((res) => { resolveDone = res; });
     try {
       const maybePromise = html5Qr.stop();
       Promise.resolve(maybePromise)
         .catch(() => {})
         .finally(() => {
           try { html5Qr.clear(); } catch { /* already cleared / never started */ }
+          resolveDone();
         });
     } catch {
       // stop() itself threw synchronously (e.g. scanner was never running) —
       // still try to clear so the DOM node is left in a clean state.
       try { html5Qr.clear(); } catch { /* ignore */ }
+      resolveDone();
     }
+    return done;
   };
 
   useEffect(() => {
     let cancelled = false;
     let html5Qr;
 
-    try {
-      html5Qr = new Html5Qrcode(regionId);
-    } catch (e) {
-      setErr("Camera unavailable: " + (e?.message || String(e)));
-      setStarting(false);
-      return;
-    }
-    scannerRef.current = html5Qr;
+    // Wait for any previous instance's camera to actually be released
+    // before requesting it again, then run the rest of the startup only if
+    // this effect hasn't since been cleaned up (e.g. modal closed while
+    // we were waiting).
+    const myTurn = cameraReleaseChain.then(async () => {
+      if (cancelled) return;
 
-    html5Qr
-      .start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: 240 },
-        (decodedText) => {
-          if (cancelled) return;
-          cancelled = true;
-          const text = decodedText.trim();
-          // Tear down the camera first, but don't make the caller wait on
-          // it — `onDetected` (which typically closes this modal, unmounting
-          // it) can run right away. The unmount cleanup below is guarded to
-          // no-op safely if this teardown is still in flight.
-          safeTeardown(html5Qr);
-          onDetected(text);
-        },
-        () => {} // per-frame "no QR found yet" — ignore
-      )
-      .then(() => { if (!cancelled) setStarting(false); })
-      .catch((e) => {
+      // Explicit permission check up front: getUserMedia rejects clearly
+      // on denial/no-camera, instead of leaving start() to hang on some
+      // browsers when there's no environment-facing camera to grab.
+      let stream;
+      try {
+        stream = await withTimeout(
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }),
+          8000,
+          "Camera permission request timed out."
+        );
+      } catch (e) {
         if (!cancelled) setErr("Camera unavailable: " + (e?.message || String(e)));
-      });
+        return;
+      }
+      // We only needed this to confirm access / surface a clear error;
+      // html5-qrcode opens its own stream via start() below.
+      stream.getTracks().forEach((t) => t.stop());
+      if (cancelled) return;
+
+      try {
+        html5Qr = new Html5Qrcode(regionId);
+      } catch (e) {
+        if (!cancelled) { setErr("Camera unavailable: " + (e?.message || String(e))); setStarting(false); }
+        return;
+      }
+      scannerRef.current = html5Qr;
+
+      withTimeout(
+        html5Qr.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: 240 },
+          (decodedText) => {
+            if (cancelled) return;
+            cancelled = true;
+            const text = decodedText.trim();
+            // Tear down the camera first, but don't make the caller wait on
+            // it — `onDetected` (which typically closes this modal, unmounting
+            // it) can run right away. The unmount cleanup below is guarded to
+            // no-op safely if this teardown is still in flight.
+            cameraReleaseChain = safeTeardown(html5Qr);
+            onDetected(text);
+          },
+          () => {} // per-frame "no QR found yet" — ignore
+        ),
+        8000,
+        "Camera took too long to start — try closing other apps/tabs using it."
+      )
+        .then(() => { if (!cancelled) setStarting(false); })
+        .catch((e) => {
+          if (!cancelled) setErr("Camera unavailable: " + (e?.message || String(e)));
+          // The start() call may still land after our timeout fires; make
+          // sure we release the device rather than leaving it locked for
+          // the next instance.
+          cameraReleaseChain = safeTeardown(html5Qr);
+        });
+    });
 
     return () => {
       cancelled = true;
-      safeTeardown(html5Qr);
+      if (html5Qr) {
+        cameraReleaseChain = safeTeardown(html5Qr);
+      } else {
+        // We were still waiting our turn (or on the permission prompt) when
+        // this unmounted — chain onto myTurn so a late-arriving stream still
+        // gets released instead of leaking.
+        cameraReleaseChain = cameraReleaseChain.then(() => myTurn).catch(() => {});
+      }
     };
   }, [onDetected, regionId]);
 
@@ -281,12 +350,41 @@ export default function RiderScannerView({ orders, setOrders }) {
     if (order.status === "completed") { showToast(`Order ${orderId} is already delivered.`, "warn"); return; }
 
     setBusyId(orderId);
-    const { error } = await supabase.from("orders").update({ status: "completed" }).eq("id", orderId);
+
+    // IMPORTANT: .select() forces Supabase to return the rows it actually
+    // touched. Without it, `error` comes back null even when RLS silently
+    // blocks the write or the `.eq("id", ...)` match hits zero rows — the
+    // request "succeeds" but nothing in the database changes, which is why
+    // the order can look delivered locally and then revert to pending on
+    // the next refresh/subscription tick.
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ status: "completed" })
+      .eq("id", orderId)
+      .select();
+
     setBusyId(null);
 
-    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
+    if (error) {
+      showToast(`Could not update order: ${error.message}`, "err");
+      return;
+    }
 
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "completed" } : o));
+    if (!data || data.length === 0) {
+      // Zero rows affected with no error — almost always a Row-Level
+      // Security policy blocking the UPDATE for the current role, or the
+      // scanned/selected id not actually matching the `id` column (type
+      // mismatch, stale QR text, etc). Surface this instead of silently
+      // pretending it worked.
+      showToast(
+        `Order ${orderId} was not updated — check update permissions/RLS on "orders".`,
+        "err"
+      );
+      return;
+    }
+
+    const updatedRow = data[0];
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updatedRow } : o));
     setSelected(null);
     showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
