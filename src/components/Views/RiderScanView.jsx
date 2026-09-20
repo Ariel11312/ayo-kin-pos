@@ -30,15 +30,52 @@ const fmtTime = (iso) => {
    QR Scan Modal — opens the camera, reads a rider
    slip's QR, hands the raw decoded text back.
 ───────────────────────────────────────────── */
+// Give every mounted scanner its own DOM id rather than one fixed id. If a
+// second Html5Qrcode instance is ever constructed before the first one's
+// DOM node has fully torn down (e.g. opening the scanner again quickly
+// after closing it), some html5-qrcode versions throw *synchronously* from
+// `new Html5Qrcode()` or `.stop()`. An uncaught throw inside a mounted
+// component with no error boundary blanks the entire React app — which is
+// what was happening here.
+let qrScanInstanceCounter = 0;
+
 function QrScanModal({ onDetected, onClose, isMobile }) {
-  const regionId = "rider-scanner-qr-region";
+  const regionIdRef = useRef(`rider-scanner-qr-region-${++qrScanInstanceCounter}`);
+  const regionId = regionIdRef.current;
   const scannerRef = useRef(null);
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(true);
 
+  // Stopping a scanner that never finished starting, or stopping/clearing
+  // it twice, is what tends to throw. This helper makes teardown safe to
+  // call from both the detection handler and the unmount cleanup without
+  // letting either throw escape uncaught.
+  const safeTeardown = (html5Qr) => {
+    try {
+      const maybePromise = html5Qr.stop();
+      Promise.resolve(maybePromise)
+        .catch(() => {})
+        .finally(() => {
+          try { html5Qr.clear(); } catch { /* already cleared / never started */ }
+        });
+    } catch {
+      // stop() itself threw synchronously (e.g. scanner was never running) —
+      // still try to clear so the DOM node is left in a clean state.
+      try { html5Qr.clear(); } catch { /* ignore */ }
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
-    const html5Qr = new Html5Qrcode(regionId);
+    let html5Qr;
+
+    try {
+      html5Qr = new Html5Qrcode(regionId);
+    } catch (e) {
+      setErr("Camera unavailable: " + (e?.message || String(e)));
+      setStarting(false);
+      return;
+    }
     scannerRef.current = html5Qr;
 
     html5Qr
@@ -48,8 +85,13 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
         (decodedText) => {
           if (cancelled) return;
           cancelled = true;
-          html5Qr.stop().then(() => html5Qr.clear()).catch(() => {});
-          onDetected(decodedText.trim());
+          const text = decodedText.trim();
+          // Tear down the camera first, but don't make the caller wait on
+          // it — `onDetected` (which typically closes this modal, unmounting
+          // it) can run right away. The unmount cleanup below is guarded to
+          // no-op safely if this teardown is still in flight.
+          safeTeardown(html5Qr);
+          onDetected(text);
         },
         () => {} // per-frame "no QR found yet" — ignore
       )
@@ -60,9 +102,9 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
 
     return () => {
       cancelled = true;
-      html5Qr.stop().then(() => html5Qr.clear()).catch(() => {});
+      safeTeardown(html5Qr);
     };
-  }, [onDetected]);
+  }, [onDetected, regionId]);
 
   const overlay = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",

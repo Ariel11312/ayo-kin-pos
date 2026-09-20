@@ -20,6 +20,13 @@ const ADDRESS_MAX_LEN  = 150;
 
 const EMPTY_FORM = { type: "", idNo: "", name: "", address: "" };
 
+// Desktop table columns. Columns from CENTER_FROM_INDEX onward (Items,
+// Total, Discount, Payment, Status, Actions) are center-aligned; everything
+// before that (Order ID, Time, Type, and the customer-info columns) reads
+// left-aligned like ordinary text.
+const TABLE_HEADERS = ["Order ID", "Time", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
+const CENTER_FROM_INDEX = TABLE_HEADERS.indexOf("Items");
+
 export default function OrdersView({ orders, setOrders }) {
   const isMobile = useIsMobile();
 
@@ -252,6 +259,13 @@ export default function OrdersView({ orders, setOrders }) {
     fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : undefined,
   };
 
+  // Truncating text cell shared by the Customer/Contact/Address columns —
+  // keeps long values from blowing out the row height or column width.
+  const truncCell = (maxWidth) => ({
+    padding: "10px 14px", color: MUTED, maxWidth,
+    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+  });
+
   // ── Render ─────────────────────────────────────────────
   return (
     <div style={{
@@ -371,6 +385,19 @@ export default function OrdersView({ orders, setOrders }) {
                     {" · "}<span style={{ textTransform: "uppercase", fontWeight: 700 }}>{order.payment_method}</span>
                   </div>
 
+                  {/* Customer info line — name, contact, delivery address */}
+                  {(order.customer_name || order.contact_number || order.delivery_address) && (
+                    <div style={{ fontSize: 12, color: TEXT, marginTop: 4, lineHeight: 1.5 }}>
+                      {order.customer_name && <div style={{ fontWeight: 700 }}>{order.customer_name}</div>}
+                      {order.contact_number && <div style={{ color: MUTED }}>{order.contact_number}</div>}
+                      {order.delivery_address && (
+                        <div style={{ color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {order.delivery_address}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Total */}
                   <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 8 }}>
                     {order.subtotal ? (
@@ -449,12 +476,12 @@ export default function OrdersView({ orders, setOrders }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: SUBTLE }}>
-                  {["Order ID", "Time", "Type", "Items", "Total", "Discount", "Payment", "Status", "Actions"].map((h, i) => (
+                  {TABLE_HEADERS.map((h, i) => (
                     <th
                       key={h}
                       style={{
                         padding: "10px 14px",
-                        textAlign: i >= 3 ? "center" : "left",
+                        textAlign: i >= CENTER_FROM_INDEX ? "center" : "left",
                         fontWeight: 700, color: MUTED, fontSize: 10,
                         textTransform: "uppercase", letterSpacing: 0.8,
                         whiteSpace: "nowrap",
@@ -495,6 +522,21 @@ export default function OrdersView({ orders, setOrders }) {
 
                       {/* Type */}
                       <td style={{ padding: "10px 14px", textTransform: "capitalize" }}>{order.type}</td>
+
+                      {/* Customer */}
+                      <td style={truncCell(140)} title={order.customer_name || ""}>
+                        {order.customer_name || "—"}
+                      </td>
+
+                      {/* Contact */}
+                      <td style={{ padding: "10px 14px", color: MUTED, whiteSpace: "nowrap" }}>
+                        {order.contact_number || "—"}
+                      </td>
+
+                      {/* Delivery Address */}
+                      <td style={truncCell(200)} title={order.delivery_address || ""}>
+                        {order.delivery_address || "—"}
+                      </td>
 
                       {/* Items */}
                       <td style={{ padding: "10px 14px", textAlign: "center", color: MUTED }}>{order.items.length}</td>

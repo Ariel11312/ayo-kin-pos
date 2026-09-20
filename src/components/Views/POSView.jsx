@@ -41,13 +41,29 @@ const DISCOUNT_TYPES = [
   { key: "custom", label: "Custom",         rate: null },
 ];
 
-// Two order types: a combined "Pickup & Delivery" (requires customer name +
-// address, starts as "pending" until a rider completes it) and "Walk-in"
-// for in-store customers (completes immediately at the counter).
+// Two order types: a combined "Pickup & Delivery" (requires customer name,
+// contact number and address, starts as "pending" until a rider completes
+// it) and "Walk-in" for in-store customers (completes immediately at the
+// counter, but we still capture the same contact details for records).
 const ORDER_TYPES = [
   { key: "pickup_delivery", label: "Pickup & Delivery" },
   { key: "walk_in",         label: "Walk-in" },
 ];
+
+// PH mobile numbers are entered as e.g. "09171234567" but stored/dialled
+// as "+639171234567". Strip everything but digits, drop a leading trunk
+// "0" (only ever meaningful as the very first digit), and cap at the 10
+// digits that follow the +63 country code.
+const CONTACT_DIGITS = 10;
+
+const normalizeContactInput = (raw) => {
+  let digits = (raw || "").replace(/\D/g, "");
+  if (digits.startsWith("63")) digits = digits.slice(2); // strip country code if pasted in full
+  if (digits.startsWith("0")) digits = digits.slice(1);
+  return digits.slice(0, CONTACT_DIGITS);
+};
+
+const formatContactForSave = (digits) => (digits ? `+63${digits}` : "");
 
 /* ── stock status (mirrors StockView logic) ── */
 const WARNING    = "#B7770D";
@@ -83,6 +99,12 @@ const parseRiderOrderId = (decodedText) => {
   const match = (decodedText || "").match(/Order ID:\s*(\S+)/i);
   return match ? match[1] : null;
 };
+
+// Minimum characters typed before we bother querying past orders for a
+// matching customer, and how long to wait after the last keystroke.
+const CUSTOMER_SEARCH_MIN_CHARS = 2;
+const CUSTOMER_SEARCH_DEBOUNCE_MS = 350;
+const CUSTOMER_SEARCH_MAX_RESULTS = 6;
 
 /* ─────────────────────────────────────────────
    Responsive helper
@@ -263,15 +285,51 @@ function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
    scanning (only one is ever mounted at a time,
    so a shared region id is safe).
 ───────────────────────────────────────────── */
+// Give every mounted scanner its own DOM id. Reusing one fixed id for both
+// the promo and rider scanners meant a second Html5Qrcode instance could be
+// constructed on top of a node the first instance hadn't fully torn down —
+// some html5-qrcode versions throw *synchronously* from `new Html5Qrcode()`
+// or `.stop()` in that case, and an uncaught throw inside a mounted
+// component with no error boundary blanks the entire React app.
+let qrScanInstanceCounter = 0;
+
 function QrScanModal({ title, subtitle, onDetected, onClose, isMobile }) {
-  const regionId = "qr-scan-region";
+  const regionIdRef = useRef(`qr-scan-region-${++qrScanInstanceCounter}`);
+  const regionId = regionIdRef.current;
   const scannerRef = useRef(null);
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(true);
 
+  // Stopping a scanner that never finished starting, or stopping/clearing
+  // it twice, is what tends to throw. This helper makes teardown safe to
+  // call from both the detection handler and the unmount cleanup without
+  // letting either throw escape uncaught.
+  const safeTeardown = (html5Qr) => {
+    try {
+      const maybePromise = html5Qr.stop();
+      Promise.resolve(maybePromise)
+        .catch(() => {})
+        .finally(() => {
+          try { html5Qr.clear(); } catch { /* already cleared / never started */ }
+        });
+    } catch {
+      // stop() itself threw synchronously (e.g. scanner was never running) —
+      // still try to clear so the DOM node is left in a clean state.
+      try { html5Qr.clear(); } catch { /* ignore */ }
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
-    const html5Qr = new Html5Qrcode(regionId);
+    let html5Qr;
+
+    try {
+      html5Qr = new Html5Qrcode(regionId);
+    } catch (e) {
+      setErr("Camera unavailable: " + (e?.message || String(e)));
+      setStarting(false);
+      return;
+    }
     scannerRef.current = html5Qr;
 
     html5Qr
@@ -281,8 +339,13 @@ function QrScanModal({ title, subtitle, onDetected, onClose, isMobile }) {
         (decodedText) => {
           if (cancelled) return;
           cancelled = true;
-          html5Qr.stop().then(() => html5Qr.clear()).catch(() => {});
-          onDetected(decodedText.trim());
+          const text = decodedText.trim();
+          // Tear down the camera first, but don't make the caller wait on
+          // it — `onDetected` (which typically closes this modal, unmounting
+          // it) can run right away. The unmount cleanup below is guarded to
+          // no-op safely if this teardown is still in flight.
+          safeTeardown(html5Qr);
+          onDetected(text);
         },
         () => {} // per-frame "no QR found yet" — ignore
       )
@@ -293,9 +356,9 @@ function QrScanModal({ title, subtitle, onDetected, onClose, isMobile }) {
 
     return () => {
       cancelled = true;
-      html5Qr.stop().then(() => html5Qr.clear()).catch(() => {});
+      safeTeardown(html5Qr);
     };
-  }, [onDetected]);
+  }, [onDetected, regionId]);
 
   const overlay = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
@@ -344,6 +407,9 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   const [cart, setCart]                 = useState(() => loadCartState()?.cart ?? []);
   const [orderType, setOrderType]       = useState(() => loadCartState()?.orderType ?? "walk_in");
   const [customerName, setCustomerName] = useState(() => loadCartState()?.customerName ?? "");
+  // Stored as bare local digits (no "+63", no leading "0") — see
+  // normalizeContactInput / formatContactForSave.
+  const [contactNumber, setContactNumber] = useState(() => loadCartState()?.contactNumber ?? "");
   const [tableNo, setTableNo]           = useState(() => loadCartState()?.tableNo ?? "");
   const [deliveryAddr, setDeliveryAddr] = useState(() => loadCartState()?.deliveryAddr ?? "");
   const [discount, setDiscount]         = useState(() => loadCartState()?.discount ?? "");
@@ -363,10 +429,24 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   // Mobile only: the cart lives in a sheet that slides up over the menu.
   const [cartOpen, setCartOpen] = useState(false);
 
+  // ── Existing-customer lookup ──
+  // As the cashier types a name, we look for matching customers among past
+  // orders (an order row already carries name/contact/address, so there's
+  // no separate customers table to query). Picking a suggestion fills in
+  // the contact number and address so repeat customers don't need to be
+  // re-typed from scratch.
+  const [customerSuggestions, setCustomerSuggestions] = useState([]);
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [customerSearchLoading, setCustomerSearchLoading] = useState(false);
+  const customerFieldRef = useRef(null);
+  // True right after a suggestion is picked (or the field is cleared), so
+  // the effect below doesn't immediately re-search and reopen the dropdown.
+  const suppressNextSearchRef = useRef(false);
+
   // Persist cart-related state on every change
   useEffect(() => {
-    saveCartState({ cart, orderType, customerName, tableNo, deliveryAddr, discount, discountType, discountInfo, promo });
-  }, [cart, orderType, customerName, tableNo, deliveryAddr, discount, discountType, discountInfo, promo]);
+    saveCartState({ cart, orderType, customerName, contactNumber, tableNo, deliveryAddr, discount, discountType, discountInfo, promo });
+  }, [cart, orderType, customerName, contactNumber, tableNo, deliveryAddr, discount, discountType, discountInfo, promo]);
 
   // Leaving mobile width while the sheet is open would otherwise strand it open.
   useEffect(() => {
@@ -382,9 +462,83 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     return () => { document.body.style.overflow = prev; };
   }, [isMobile, cartOpen, modal]);
 
+  // Debounced search of past orders for a matching customer name.
+  useEffect(() => {
+    if (suppressNextSearchRef.current) {
+      suppressNextSearchRef.current = false;
+      return;
+    }
+    const q = customerName.trim();
+    if (q.length < CUSTOMER_SEARCH_MIN_CHARS) {
+      setCustomerSuggestions([]);
+      setCustomerSearchLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCustomerSearchLoading(true);
+    const handle = setTimeout(async () => {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("customer_name, contact_number, delivery_address, created_at")
+        .ilike("customer_name", `%${q}%`)
+        .not("customer_name", "is", null)
+        .neq("customer_name", "")
+        .order("created_at", { ascending: false })
+        .limit(30);
+
+      if (cancelled) return;
+      setCustomerSearchLoading(false);
+
+      if (error || !data) { setCustomerSuggestions([]); return; }
+
+      // Dedupe by name+contact (same person can place several orders),
+      // keeping the most recent record for each.
+      const seen = new Set();
+      const unique = [];
+      for (const row of data) {
+        const key = `${row.customer_name.trim().toLowerCase()}|${row.contact_number || ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(row);
+        if (unique.length >= CUSTOMER_SEARCH_MAX_RESULTS) break;
+      }
+      setCustomerSuggestions(unique);
+    }, CUSTOMER_SEARCH_DEBOUNCE_MS);
+
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [customerName]);
+
+  // Close the suggestions dropdown on outside click/tap.
+  useEffect(() => {
+    const onOutside = (e) => {
+      if (customerFieldRef.current && !customerFieldRef.current.contains(e.target)) {
+        setShowCustomerSuggestions(false);
+      }
+    };
+    document.addEventListener("mousedown", onOutside);
+    document.addEventListener("touchstart", onOutside);
+    return () => {
+      document.removeEventListener("mousedown", onOutside);
+      document.removeEventListener("touchstart", onOutside);
+    };
+  }, []);
+
+  const selectCustomerSuggestion = (row) => {
+    suppressNextSearchRef.current = true;
+    setCustomerName(row.customer_name || "");
+    setContactNumber(normalizeContactInput(row.contact_number || ""));
+    if (row.delivery_address) setDeliveryAddr(row.delivery_address);
+    setCustomerSuggestions([]);
+    setShowCustomerSuggestions(false);
+  };
+
   const showToast = (msg, type = "warn") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2600);
+  };
+
+  const handleContactChange = (e) => {
+    setContactNumber(normalizeContactInput(e.target.value));
   };
 
   const filtered = items.filter(i => {
@@ -442,14 +596,18 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     return isTracked(live) && c.qty > Number(live.stock);
   });
 
-  // Pickup & Delivery orders need a name and address so the rider knows
-  // where to go — required before checkout, not just before printing.
-  const missingDeliveryInfo = orderType === "pickup_delivery" && (!customerName.trim() || !deliveryAddr.trim());
+  // Pickup & Delivery orders need a name, a full 10-digit contact number,
+  // and an address so the rider knows who/where to go — required before
+  // checkout, not just before printing. Walk-in still collects the same
+  // fields but doesn't require them.
+  const missingDeliveryInfo = orderType === "pickup_delivery" &&
+    (!customerName.trim() || contactNumber.length !== CONTACT_DIGITS || !deliveryAddr.trim());
 
   const clearOrder = () => {
-    setCart([]); setOrderType("walk_in"); setCustomerName(""); setTableNo("");
+    setCart([]); setOrderType("walk_in"); setCustomerName(""); setContactNumber(""); setTableNo("");
     setDeliveryAddr(""); setDiscount(""); setDiscountType("none");
     setDiscountInfo(null); setPromo(null); setPromoInput(""); setError("");
+    setCustomerSuggestions([]); setShowCustomerSuggestions(false);
     saveCartState(null);
   };
 
@@ -547,6 +705,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
       const status = orderType === "pickup_delivery" ? "pending" : "completed";
       const order = {
         id: genId(), type: orderType, customer_name: customerName,
+        contact_number: formatContactForSave(contactNumber),
         table_no: tableNo, delivery_address: deliveryAddr,
         items: cart.map(c => ({ id: c.id, name: c.name, price: c.price, qty: c.qty })),
         subtotal, discount: discAmt, total, status,
@@ -622,7 +781,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   /* ── Cart contents: shared by the desktop column and the mobile sheet ── */
   const cartBody = (
     <>
-      {/* Order type */}
+      {/* Order type + customer details */}
       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
           {ORDER_TYPES.map(t => (
@@ -637,15 +796,88 @@ export default function POSView({ categories, items, setItems, orders, setOrders
             </button>
           ))}
         </div>
-        {orderType === "pickup_delivery" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input value={customerName} onChange={e => setCustomerName(e.target.value)}
-              placeholder="Customer name" autoCapitalize="words"
+
+        {/* Customer name, contact number and address — captured for every
+            order type. Only Pickup & Delivery requires them filled in
+            (see missingDeliveryInfo). */}
+        <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+          Customer details
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {/* Name field doubles as an existing-customer search: typing a
+              name looks up past orders and offers matches to autofill. */}
+          <div ref={customerFieldRef} style={{ position: "relative" }}>
+            <input
+              value={customerName}
+              onChange={e => { setCustomerName(e.target.value); setShowCustomerSuggestions(true); }}
+              onFocus={() => { if (customerName.trim().length >= CUSTOMER_SEARCH_MIN_CHARS) setShowCustomerSuggestions(true); }}
+              placeholder="Customer name"
+              autoCapitalize="words"
+              autoComplete="off"
               style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
-            <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
-              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+
+            {showCustomerSuggestions && customerName.trim().length >= CUSTOMER_SEARCH_MIN_CHARS && (
+              <div style={{
+                position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, zIndex: 60,
+                background: BG, border: `1px solid ${BORDER}`, borderRadius: 8,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.15)", maxHeight: 220, overflowY: "auto",
+              }}>
+                {customerSearchLoading && customerSuggestions.length === 0 && (
+                  <div style={{ padding: "10px 12px", fontSize: 12, color: MUTED }}>Searching…</div>
+                )}
+                {!customerSearchLoading && customerSuggestions.length === 0 && (
+                  <div style={{ padding: "10px 12px", fontSize: 12, color: MUTED }}>No existing customer found</div>
+                )}
+                {customerSuggestions.map((row, idx) => (
+                  <button
+                    key={`${row.customer_name}-${row.contact_number}-${idx}`}
+                    onClick={() => selectCustomerSuggestion(row)}
+                    style={{
+                      display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+                      background: "transparent", border: "none", fontFamily: FONT,
+                      padding: isMobile ? "10px 12px" : "8px 12px",
+                      borderBottom: idx < customerSuggestions.length - 1 ? `1px solid ${BORDER}` : "none",
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = SUBTLE; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{row.customer_name}</div>
+                    <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {row.contact_number || "No contact number"}
+                      {row.delivery_address ? ` · ${row.delivery_address}` : ""}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
+
+          <div style={{ display: "flex" }}>
+            <span style={{
+              display: "flex", alignItems: "center", flexShrink: 0,
+              padding: isMobile ? "0 12px" : "0 10px",
+              border: `1px solid ${BORDER}`, borderRight: "none",
+              borderRadius: "6px 0 0 6px", background: SUBTLE, color: MUTED,
+              fontWeight: 700, fontFamily: FONT, fontSize: noZoomFont(isMobile),
+            }}>+63</span>
+            <input
+              value={contactNumber}
+              onChange={handleContactChange}
+              placeholder="9171234567"
+              inputMode="numeric"
+              autoComplete="tel-national"
+              maxLength={CONTACT_DIGITS}
+              style={{
+                ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
+                fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px",
+                borderRadius: "0 6px 6px 0",
+              }}
+            />
+          </div>
+
+          <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)}
+            placeholder={orderType === "pickup_delivery" ? "Delivery address" : "Address"}
+            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+        </div>
       </div>
 
       {/* Cart items */}
@@ -831,7 +1063,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
           <Btn
             onClick={() => {
               if (missingDeliveryInfo) {
-                setError("Customer name and delivery address are required for Pickup & Delivery orders.");
+                setError("Customer name, a valid 10-digit contact number, and delivery address are required for Pickup & Delivery orders.");
                 return;
               }
               setError(""); setModal("payment");
