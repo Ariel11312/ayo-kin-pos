@@ -25,6 +25,29 @@ const REORDER_REASONS = [
   "Opening stock",
 ];
 
+/* ─── desktop table layout ───
+   ONE list drives both the <colgroup> and the header row, so the header,
+   the column widths and the body cells can never drift apart again.
+   The body row in the render below follows this exact order:
+   Item · Category · Price · Qty · Status · Unit · Reorder at · Available · Actions */
+const TABLE_COLS = [
+  { key: "name",        label: "Item",       width: "20%", align: "left"  },
+  { key: "category_id", label: "Category",   width: "10%", align: "left"  },
+  { key: "price",       label: "Price",      width: "9%",  align: "right" },
+  { key: null,          label: "Qty",        width: "17%", align: "left"  },
+  { key: "stock",       label: "Status",     width: "11%", align: "left"  },
+  { key: "unit",        label: "Unit",       width: "9%",  align: "left"  },
+  { key: "reorder",     label: "Reorder at", width: "9%",  align: "left"  },
+  { key: null,          label: "Available",  width: "8%",  align: "left"  },
+  { key: null,          label: "Actions",    width: "7%",  align: "right" },
+];
+
+const thBase = {
+  fontSize: 11, fontWeight: 700, color: MUTED,
+  padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`,
+  position: "sticky", top: 0, background: BG, zIndex: 1,
+};
+
 /* ─── helpers ─── */
 // Items sold "per load" (wash/dry/fold, delivery tiers, etc.) are services,
 // not physical inventory — they never go "out of stock" no matter what's
@@ -263,7 +286,9 @@ export default function StockView({ demoMode }) {
     else { setSortKey(key); setSortDir("asc"); }
   }
 
+  // Header label. Sortable columns (key != null) are clickable.
   function colHeader(key, label) {
+    if (!key) return <span style={{ fontWeight: 600, color: MUTED }}>{label}</span>;
     const active = sortKey === key;
     return (
       <span onClick={() => handleSort(key)} style={{ cursor: "pointer", userSelect: "none", fontWeight: active ? 800 : 600, color: active ? DR : MUTED }}>
@@ -349,7 +374,7 @@ export default function StockView({ demoMode }) {
     return list;
   }, [items, search, filter, sortKey, sortDir]);
 
-  // Only physically stock-tracked items (unit !== "load") count toward
+  // Only physically stock-tracked items (unit !== "service") count toward
   // out-of-stock / low-stock / inventory-value totals. Service items are
   // still counted in Total SKUs.
   const totalItems = items.length;
@@ -504,28 +529,21 @@ export default function StockView({ demoMode }) {
           )}
         </div>
       ) : (
-        <div style={{ flex: 1, overflowY: "auto", padding: "0 20px 20px" }}>
+        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "0 20px 20px" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
             <colgroup>
-              <col style={{ width: "18%" }} /><col style={{ width: "10%" }} /><col style={{ width: "9%" }} />
-              <col style={{ width: "17%" }} /><col style={{ width: "12%" }} /><col style={{ width: "10%" }} />
-              <col style={{ width: "13%" }} /><col style={{ width: "11%" }} />
+              {TABLE_COLS.map((c, i) => <col key={i} style={{ width: c.width }} />)}
             </colgroup>
             <thead>
               <tr>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("name", "Item")}</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("category_id", "Category")}</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "right", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("price", "Price")}</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>Qty</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("stock", "Status")}</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>{colHeader("reorder", "Reorder at")}</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "left", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>Available</th>
-                <th style={{ fontSize: 11, fontWeight: 700, color: MUTED, textAlign: "right", padding: "10px 8px 8px", borderBottom: `1px solid ${BORDER}`, position: "sticky", top: 0, background: BG, zIndex: 1 }}>Actions</th>
+                {TABLE_COLS.map((c, i) => (
+                  <th key={i} style={{ ...thBase, textAlign: c.align }}>{colHeader(c.key, c.label)}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 13 }}>No items match your search or filter.</td></tr>
+                <tr><td colSpan={TABLE_COLS.length} style={{ textAlign: "center", color: MUTED, padding: "40px 0", fontSize: 13 }}>No items match your search or filter.</td></tr>
               )}
               {rows.map(item => {
                 const s = getStatus(item);
@@ -534,16 +552,23 @@ export default function StockView({ demoMode }) {
                 const tracked = isTracked(item);
                 return (
                   <tr key={item.id}>
+                    {/* 1 · Item */}
                     <td style={{ ...tdStyle, borderLeft: `3px solid ${leftBorder}` }}>
                       <div style={{ fontWeight: 700, color: TEXT }}>{item.name}</div>
-                      <div style={{ fontSize: 11, color: MUTED, marginTop: 1 }}>ID: {item.id}</div>
+                      <div style={{ fontSize: 11, color: MUTED, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>ID: {item.id}</div>
                     </td>
+
+                    {/* 2 · Category */}
                     <td style={tdStyle}>
-                      <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: SUBTLE, color: MUTED }}>
+                      <span style={{ display: "inline-block", maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "middle", fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: SUBTLE, color: MUTED }}>
                         {item.category_id || "—"}
                       </span>
                     </td>
+
+                    {/* 3 · Price */}
                     <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: TEXT }}>{fmt(item.price ?? 0)}</td>
+
+                    {/* 4 · Qty */}
                     <td style={tdStyle}>
                       {tracked ? (
                         <>
@@ -558,8 +583,23 @@ export default function StockView({ demoMode }) {
                         <span style={{ fontSize: 12, color: MUTED }}>—</span>
                       )}
                     </td>
+
+                    {/* 5 · Status */}
                     <td style={tdStyle}><StatusBadge item={item} /></td>
+
+                    {/* 6 · Unit */}
+                    <td style={tdStyle}>
+                      {item.unit ? (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: TEXT, textTransform: "capitalize" }}>{item.unit}</span>
+                      ) : (
+                        <span style={{ fontSize: 12, color: MUTED }}>—</span>
+                      )}
+                    </td>
+
+                    {/* 7 · Reorder at */}
                     <td style={{ ...tdStyle, color: MUTED, fontWeight: 600 }}>{tracked ? `${item.reorder ?? 3} units` : "—"}</td>
+
+                    {/* 8 · Available */}
                     <td style={tdStyle}>
                       <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
                         <span style={{ position: "relative", display: "inline-block", width: 34, height: 20, flexShrink: 0 }}>
@@ -571,6 +611,8 @@ export default function StockView({ demoMode }) {
                         <span style={{ fontSize: 12, color: item.available ? SUCCESS : MUTED, fontWeight: 600 }}>{item.available ? "On" : "Off"}</span>
                       </label>
                     </td>
+
+                    {/* 9 · Actions */}
                     <td style={{ ...tdStyle, textAlign: "right" }}>
                       <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
                     </td>
@@ -640,6 +682,7 @@ export default function StockView({ demoMode }) {
         <ModalShell title={`Edit — ${editItem.name}`} onClose={() => setModal(null)} isMobile={isMobile}>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
             Category: <strong>{editItem.category_id || "—"}</strong> · ID: {editItem.id}
+            {editItem.unit && <> · Unit: <strong>{editItem.unit}</strong></>}
             {!isTracked(editItem) && <> · <span style={{ color: NEUTRAL, fontWeight: 700 }}>Service item (not stock-tracked)</span></>}
           </div>
           <div style={rowStyle}>
