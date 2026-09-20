@@ -688,11 +688,11 @@ export default function POSView({ categories, items, setItems, orders, setOrders
       showToast(`Order ${orderId} is already marked delivered.`, "warn"); return;
     }
 
-    const { error } = await supabase.from("orders").update({ status: "completed" }).eq("id", orderId);
-    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
+const { error } = await supabase.from("orders").update({ status: "completed" }).eq("id", orderId);
+if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
 
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "completed" } : o));
-    showToast(`Order ${orderId} marked as delivered.`, "warn");
+setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "completed" } : o));
+showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
 
   const closeReceipt = () => {

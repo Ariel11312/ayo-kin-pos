@@ -68,6 +68,16 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(true);
 
+  // FIX: keep the latest onDetected in a ref instead of putting it in the
+  // effect's dependency array. Whoever renders <QrScanModal onDetected={
+  // (text) => handleScanned(text) }> passes a brand-new function on every
+  // parent re-render — with `onDetected` as a dependency, the start-camera
+  // effect below would re-run on every one of those re-renders, tearing
+  // down and restarting the camera each time. That's what caused the
+  // "Starting camera…" spinner to loop endlessly instead of settling.
+  const onDetectedRef = useRef(onDetected);
+  useEffect(() => { onDetectedRef.current = onDetected; }, [onDetected]);
+
   // Stopping a scanner that never finished starting, or stopping/clearing
   // it twice, is what tends to throw. This helper makes teardown safe to
   // call from both the detection handler and the unmount cleanup without
@@ -145,7 +155,7 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
             // it) can run right away. The unmount cleanup below is guarded to
             // no-op safely if this teardown is still in flight.
             cameraReleaseChain = safeTeardown(html5Qr);
-            onDetected(text);
+            onDetectedRef.current(text);
           },
           () => {} // per-frame "no QR found yet" — ignore
         ),
@@ -173,7 +183,11 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
         cameraReleaseChain = cameraReleaseChain.then(() => myTurn).catch(() => {});
       }
     };
-  }, [onDetected, regionId]);
+    // FIX: `onDetected` removed from deps — see onDetectedRef above. Only
+    // `regionId` (stable for the life of this instance) should restart the
+    // camera; it never actually changes, so in practice this effect now
+    // runs exactly once per mount, as intended.
+  }, [regionId]);
 
   const overlay = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
