@@ -30,9 +30,8 @@ const REORDER_REASONS = [
 // not physical inventory — they never go "out of stock" no matter what's
 // sitting in the `stock` column.
 function isTracked(item) {
-  return !!item && item.unit !== "load";
+  return !!item && item.unit !== "service";
 }
-
 function getStatus(item) {
   if (!isTracked(item)) return null; // service item — stock not applicable
   const stock   = item.stock   ?? 0;

@@ -8,6 +8,17 @@ import { ErrBox } from "../../function/messageBox";
 import { supabase } from "../../supabase/supabase";
 import useIsMobile, { noZoomFont, SAFE_BOTTOM } from "../../function/useIsMobile";
 
+const UNIT_OPTIONS = [
+  { value: "kg",      label: "Per Kilo (kg)" },
+  { value: "liter",   label: "Per Liter (L)" },
+  { value: "load",    label: "Per Load" },
+  { value: "piece",   label: "Per Piece" },
+  { value: "set",     label: "Per Set" },
+  { value: "hour",    label: "Per Hour" },
+  { value: "Cup",     label: "Per Cup" },
+  { value: "service", label: "Service (no stock)" },
+];
+
 export default function MenuView({ categories, setCategories, items, setItems, config, demoMode }) {
   const isMobile = useIsMobile();
 
@@ -20,6 +31,13 @@ export default function MenuView({ categories, setCategories, items, setItems, c
   const [page, setPage] = useState(1);
   const [confirmModal, setConfirmModal] = useState(null);
   const [successModal, setSuccessModal] = useState(null);
+
+  // Bulk selection / edit
+  const [selected, setSelected]         = useState(new Set());
+  const [bulkCategory, setBulkCategory] = useState("");
+  const [bulkUnit, setBulkUnit]         = useState("");
+  const [bulkSaving, setBulkSaving]     = useState(false);
+  const [bulkError, setBulkError]       = useState("");
 
   // Fewer rows per page on phones — cards are taller than table rows.
   const PAGE_SIZE = isMobile ? 6 : 10;
@@ -34,6 +52,50 @@ export default function MenuView({ categories, setCategories, items, setItems, c
     setEditing(item);
     setForm(item ? { ...item } : { name: "", category_id: categories[0]?.id || "", price: "", available: true });
     setError(""); setModal("item");
+  };
+
+  // ── Bulk selection ──────────────────────────────────────
+  const toggleSelect = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    setSelected(new Set());
+    setBulkCategory(""); setBulkUnit(""); setBulkError("");
+  };
+
+  const applyBulkCategory = async () => {
+    if (!bulkCategory || selected.size === 0) return;
+    setBulkSaving(true); setBulkError("");
+    const ids = Array.from(selected);
+    try {
+      const { error } = await supabase.from("menu_items").update({ category_id: bulkCategory }).in("id", ids);
+      if (error) throw new Error(error.message);
+      setItems(prev => prev.map(i => selected.has(i.id) ? { ...i, category_id: bulkCategory } : i));
+      const catName = categories.find(c => c.id === bulkCategory)?.name || "the selected category";
+      showSuccess("Category Updated", `${ids.length} item${ids.length !== 1 ? "s" : ""} moved to "${catName}".`);
+      clearSelection();
+    } catch (e) { setBulkError(e.message); }
+    finally { setBulkSaving(false); }
+  };
+
+  const applyBulkUnit = async () => {
+    if (!bulkUnit || selected.size === 0) return;
+    setBulkSaving(true); setBulkError("");
+    const ids = Array.from(selected);
+    try {
+      const { error } = await supabase.from("menu_items").update({ unit: bulkUnit }).in("id", ids);
+      if (error) throw new Error(error.message);
+      setItems(prev => prev.map(i => selected.has(i.id) ? { ...i, unit: bulkUnit } : i));
+      const unitLabel = UNIT_OPTIONS.find(u => u.value === bulkUnit)?.label || bulkUnit;
+      showSuccess("Unit Updated", `${ids.length} item${ids.length !== 1 ? "s" : ""} set to "${unitLabel}".`);
+      clearSelection();
+    } catch (e) { setBulkError(e.message); }
+    finally { setBulkSaving(false); }
   };
 
   // ── Items ──────────────────────────────────────────────
@@ -69,6 +131,12 @@ export default function MenuView({ categories, setCategories, items, setItems, c
         const { error } = await supabase.from("menu_items").delete().eq("id", id);
         if (error) throw new Error(error.message);
         setItems(prev => prev.filter(i => i.id !== id));
+        setSelected(prev => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
         closeConfirm();
         showSuccess("Item Deleted", `"${item?.name}" has been removed from the menu.`);
       },
@@ -129,6 +197,20 @@ export default function MenuView({ categories, setCategories, items, setItems, c
   // ── Render ─────────────────────────────────────────────
   const visibleItems = filterCat === "all" ? items : items.filter(i => i.category_id === filterCat);
   const pageItems = visibleItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // "Select all" only ever applies to what's currently on screen (the
+  // current page under the active filter), so switching pages/filters
+  // doesn't silently re-check items the user never looked at.
+  const allPageSelected = pageItems.length > 0 && pageItems.every(i => selected.has(i.id));
+
+  const toggleSelectAllOnPage = () => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (allPageSelected) pageItems.forEach(i => next.delete(i.id));
+      else pageItems.forEach(i => next.add(i.id));
+      return next;
+    });
+  };
 
   const catPill = (id) => ({
     padding: isMobile ? "9px 16px" : "5px 15px",
@@ -220,13 +302,70 @@ export default function MenuView({ categories, setCategories, items, setItems, c
         {categories.map(c => <button key={c.id} style={catPill(c.id)} onClick={() => { setFilterCat(c.id); setPage(1); }}>{c.name}</button>)}
       </div>
 
+      {/* Bulk edit bar — appears once at least one item is selected */}
+      {selected.size > 0 && (
+        <div style={{
+          display: "flex",
+          flexDirection: isMobile ? "column" : "row",
+          alignItems: isMobile ? "stretch" : "center",
+          gap: 10, flexWrap: "wrap",
+          background: SUBTLE, border: `1px solid ${BORDER}`, borderRadius: 8,
+          padding: isMobile ? 12 : "10px 14px", marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: TEXT, whiteSpace: "nowrap" }}>
+            {selected.size} selected
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flex: 1, flexWrap: "wrap" }}>
+            <select value={bulkCategory} onChange={e => setBulkCategory(e.target.value)}
+              style={{ ...modalInput, width: isMobile ? "100%" : 170 }}>
+              <option value="">Set category…</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <Btn variant="outline" onClick={applyBulkCategory} disabled={!bulkCategory || bulkSaving}
+              style={{ padding: isMobile ? "11px 14px" : "6px 14px", flexShrink: 0 }}>
+              {bulkSaving ? "…" : "Apply"}
+            </Btn>
+
+            <select value={bulkUnit} onChange={e => setBulkUnit(e.target.value)}
+              style={{ ...modalInput, width: isMobile ? "100%" : 170 }}>
+              <option value="">Set unit…</option>
+              {UNIT_OPTIONS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+            </select>
+            <Btn variant="outline" onClick={applyBulkUnit} disabled={!bulkUnit || bulkSaving}
+              style={{ padding: isMobile ? "11px 14px" : "6px 14px", flexShrink: 0 }}>
+              {bulkSaving ? "…" : "Apply"}
+            </Btn>
+          </div>
+
+          <Btn variant="ghost" onClick={clearSelection}
+            style={{ padding: isMobile ? "11px 14px" : "6px 14px", flexShrink: 0 }}>
+            Clear
+          </Btn>
+        </div>
+      )}
+      {bulkError && <div style={{ marginBottom: 14 }}><ErrBox msg={bulkError} /></div>}
+
       {/* ── Items: card list on mobile, table on desktop ── */}
       {isMobile ? (
         <div>
+          {pageItems.length > 0 && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 12, color: MUTED, fontWeight: 600 }}>
+              <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllOnPage}
+                style={{ width: 18, height: 18, flexShrink: 0 }} />
+              Select all on this page
+            </label>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {pageItems.map(item => (
-              <div key={item.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 10, padding: 14, background: BG }}>
+              <div key={item.id} style={{
+                border: `1px solid ${selected.has(item.id) ? DR : BORDER}`,
+                borderRadius: 10, padding: 14, background: BG,
+                boxShadow: selected.has(item.id) ? `0 0 0 1px ${DR}` : "none",
+              }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)}
+                    style={{ width: 20, height: 20, flexShrink: 0, marginTop: 2 }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: 14, fontWeight: 800, color: TEXT, wordBreak: "break-word", lineHeight: 1.3 }}>{item.name}</div>
                     <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
@@ -276,6 +415,9 @@ export default function MenuView({ categories, setCategories, items, setItems, c
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
                 <tr style={{ background: SUBTLE }}>
+                  <th style={{ padding: "10px 8px", width: 36, textAlign: "center" }}>
+                    <input type="checkbox" checked={allPageSelected} onChange={toggleSelectAllOnPage} />
+                  </th>
                   {["Item Name", "Category", "Unit", "Price", "Available", ""].map((h, i) => (
                     <th key={i} style={{ padding: "10px 14px", textAlign: i >= 2 ? "center" : "left", fontWeight: 700, color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8 }}>{h}</th>
                   ))}
@@ -283,7 +425,13 @@ export default function MenuView({ categories, setCategories, items, setItems, c
               </thead>
               <tbody>
                 {pageItems.map((item, idx) => (
-                  <tr key={item.id} style={{ borderTop: `1px solid ${BORDER}`, background: idx % 2 === 0 ? BG : "#FAFAFA" }}>
+                  <tr key={item.id} style={{
+                    borderTop: `1px solid ${BORDER}`,
+                    background: selected.has(item.id) ? DR_LIGHT : (idx % 2 === 0 ? BG : "#FAFAFA"),
+                  }}>
+                    <td style={{ padding: "10px 8px", textAlign: "center" }}>
+                      <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggleSelect(item.id)} />
+                    </td>
                     <td style={{ padding: "10px 14px", fontWeight: 700 }}>{item.name}</td>
                     <td style={{ padding: "10px 14px", color: MUTED }}>{categories.find(c => c.id === item.category_id)?.name || "—"}</td>
                     <td style={{ padding: "10px 14px", textAlign: "center", color: MUTED, textTransform: "capitalize" }}>{item.unit || "—"}</td>
@@ -338,13 +486,7 @@ export default function MenuView({ categories, setCategories, items, setItems, c
                 onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
                 style={modalInput}
               >
-                <option value="kg">Per Kilo (kg)</option>
-                <option value="liter">Per Liter (L)</option>
-                <option value="load">Per Load</option>
-                <option value="piece">Per Piece</option>
-                <option value="set">Per Set</option>
-                <option value="hour">Per Hour</option>
-                <option value="Cup">Per Cup</option>
+                {UNIT_OPTIONS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
               </select>
             </Field>
             <Field label={`Price (₱ per ${form.unit || "piece"})`}>

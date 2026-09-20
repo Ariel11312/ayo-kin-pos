@@ -41,17 +41,26 @@ const DISCOUNT_TYPES = [
   { key: "custom", label: "Custom",         rate: null },
 ];
 
+// Two order types: a combined "Pickup & Delivery" (requires customer name +
+// address, starts as "pending" until a rider completes it) and "Walk-in"
+// for in-store customers (completes immediately at the counter).
+const ORDER_TYPES = [
+  { key: "pickup_delivery", label: "Pickup & Delivery" },
+  { key: "walk_in",         label: "Walk-in" },
+];
+
 /* ── stock status (mirrors StockView logic) ── */
 const WARNING    = "#B7770D";
 const WARNING_BG = "#FEF3CD";
 const DANGER     = "#C0392B";
 const DANGER_BG  = "#FDECEA";
 
-// Items sold by "load" are services (wash/dry/fold, delivery tiers, etc.),
-// not physical inventory. Some rows still have a numeric `stock` value left
-// over in the DB (often 0), so unit alone — not just `stock == null` — has
-// to decide whether an item is stock-tracked.
-const isTracked = (item) => !!item && item.unit !== "load" && item.stock != null;
+// Items marked unit "service" aren't physical inventory — they never go
+// "out of stock" no matter what's sitting in the `stock` column. Some rows
+// still have a numeric `stock` value left over in the DB (often 0), so unit
+// alone — not just `stock == null` — has to decide whether an item is
+// stock-tracked.
+const isTracked = (item) => !!item && item.unit !== "service" && item.stock != null;
 
 const getStockStatus = (item) => {
   if (!isTracked(item)) return null; // service item or stock not tracked
@@ -66,6 +75,14 @@ const getStockStatus = (item) => {
 
 // Short label shown on a menu/cart line, e.g. "per load", "per piece".
 const unitLabel = (unit) => (unit ? `per ${unit}` : null);
+
+// Pulls the order id back out of a rider-slip QR payload, which the
+// receipt (see ReceiptModal) encodes as
+// "Order ID: ...\nCustomer: ...\nAddress: ...".
+const parseRiderOrderId = (decodedText) => {
+  const match = (decodedText || "").match(/Order ID:\s*(\S+)/i);
+  return match ? match[1] : null;
+};
 
 /* ─────────────────────────────────────────────
    Responsive helper
@@ -239,13 +256,15 @@ function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
-   Promo QR Scan Modal
-   Opens the device camera and reads a QR code
-   whose payload is just the raw promo code text
-   (this is what PromoView's QR encodes).
+   Generic QR Scan Modal
+   Opens the device camera and reads any QR code,
+   handing the raw decoded text back to the caller.
+   Reused for both promo-code scanning and rider
+   scanning (only one is ever mounted at a time,
+   so a shared region id is safe).
 ───────────────────────────────────────────── */
-function PromoScanModal({ onDetected, onClose, isMobile }) {
-  const regionId = "promo-qr-region";
+function QrScanModal({ title, subtitle, onDetected, onClose, isMobile }) {
+  const regionId = "qr-scan-region";
   const scannerRef = useRef(null);
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(true);
@@ -294,9 +313,9 @@ function PromoScanModal({ onDetected, onClose, isMobile }) {
   return (
     <div style={overlay} onClick={onClose}>
       <div style={box} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>Scan promo QR</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>{title}</div>
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
-          Point the camera at the customer's promo code.
+          {subtitle}
         </div>
         <div id={regionId} style={{ width: "100%", minHeight: 240, borderRadius: 8, overflow: "hidden", background: "#000" }} />
         {starting && !err && (
@@ -323,7 +342,8 @@ export default function POSView({ categories, items, setItems, orders, setOrders
 
   // Restore persisted cart state on mount (lazy initializers run once, before first paint)
   const [cart, setCart]                 = useState(() => loadCartState()?.cart ?? []);
-  const [orderType, setOrderType]       = useState(() => loadCartState()?.orderType ?? "pickup");
+  const [orderType, setOrderType]       = useState(() => loadCartState()?.orderType ?? "walk_in");
+  const [customerName, setCustomerName] = useState(() => loadCartState()?.customerName ?? "");
   const [tableNo, setTableNo]           = useState(() => loadCartState()?.tableNo ?? "");
   const [deliveryAddr, setDeliveryAddr] = useState(() => loadCartState()?.deliveryAddr ?? "");
   const [discount, setDiscount]         = useState(() => loadCartState()?.discount ?? "");
@@ -345,8 +365,8 @@ export default function POSView({ categories, items, setItems, orders, setOrders
 
   // Persist cart-related state on every change
   useEffect(() => {
-    saveCartState({ cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo, promo });
-  }, [cart, orderType, tableNo, deliveryAddr, discount, discountType, discountInfo, promo]);
+    saveCartState({ cart, orderType, customerName, tableNo, deliveryAddr, discount, discountType, discountInfo, promo });
+  }, [cart, orderType, customerName, tableNo, deliveryAddr, discount, discountType, discountInfo, promo]);
 
   // Leaving mobile width while the sheet is open would otherwise strand it open.
   useEffect(() => {
@@ -416,14 +436,18 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   const total = subtotal - discAmt;
 
   // Does any line in the cart exceed currently-known live stock?
-  // Service items (unit === "load", or stock not tracked) never count here.
+  // Service items (unit === "service", or stock not tracked) never count here.
   const hasOverstockedItem = cart.some(c => {
     const live = items.find(i => i.id === c.id);
     return isTracked(live) && c.qty > Number(live.stock);
   });
 
+  // Pickup & Delivery orders need a name and address so the rider knows
+  // where to go — required before checkout, not just before printing.
+  const missingDeliveryInfo = orderType === "pickup_delivery" && (!customerName.trim() || !deliveryAddr.trim());
+
   const clearOrder = () => {
-    setCart([]); setOrderType("pickup"); setTableNo("");
+    setCart([]); setOrderType("walk_in"); setCustomerName(""); setTableNo("");
     setDeliveryAddr(""); setDiscount(""); setDiscountType("none");
     setDiscountInfo(null); setPromo(null); setPromoInput(""); setError("");
     saveCartState(null);
@@ -489,13 +513,43 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     showToast(`Promo "${code}" applied.`, "warn");
   };
 
+  /* Scan a rider slip's QR to mark a Pickup & Delivery order as delivered.
+     Looks the order up locally first (fast, and works if the DB row is
+     mid-flight), then persists the status change to Supabase. */
+  const completeRiderOrder = async (decodedText) => {
+    setModal(null);
+    const orderId = parseRiderOrderId(decodedText);
+    if (!orderId) { showToast("QR code not recognized as a rider slip.", "err"); return; }
+
+    const order = orders.find(o => o.id === orderId);
+    if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
+    if (order.type !== "pickup_delivery") {
+      showToast(`Order ${orderId} isn't a Pickup & Delivery order.`, "err"); return;
+    }
+    if (order.status === "completed") {
+      showToast(`Order ${orderId} is already marked delivered.`, "warn"); return;
+    }
+
+    const { error } = await supabase.from("orders").update({ status: "completed" }).eq("id", orderId);
+    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
+
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "completed" } : o));
+    showToast(`Order ${orderId} marked as delivered.`, "warn");
+  };
+
+  const closeReceipt = () => {
+    setModal(null);
+  };
+
   const handlePaid = async (method, ref) => {
     setLoading(true); setError("");
     try {
+      const status = orderType === "pickup_delivery" ? "pending" : "completed";
       const order = {
-        id: genId(), type: orderType, table_no: tableNo, delivery_address: deliveryAddr,
+        id: genId(), type: orderType, customer_name: customerName,
+        table_no: tableNo, delivery_address: deliveryAddr,
         items: cart.map(c => ({ id: c.id, name: c.name, price: c.price, qty: c.qty })),
-        subtotal, discount: discAmt, total, status: "completed",
+        subtotal, discount: discAmt, total, status,
         payment_method: method, payment_ref: ref, created_at: ts(),
         discount_type: discountType,
         discount_info: discountType === "promo" && promo
@@ -505,9 +559,9 @@ export default function POSView({ categories, items, setItems, orders, setOrders
       const { error } = await supabase.from("orders").insert(order);
       if (error) throw new Error(error.message);
 
-      // Decrement stock only for physical, stock-tracked items. "load"
-      // (service) items never touch menu_items.stock, even if the row still
-      // has a leftover numeric value there.
+      // Decrement stock only for physical, stock-tracked items. Service
+      // items never touch menu_items.stock, even if the row still has a
+      // leftover numeric value there.
       //
       // Writing this update to menu_items is what triggers Supabase Realtime
       // — StockView (and any other open screen) picks up the new stock
@@ -570,22 +624,27 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     <>
       {/* Order type */}
       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-          {["pickup", "drop off", "delivery"].map(t => (
-            <button key={t} onClick={() => setOrderType(t)}
+        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          {ORDER_TYPES.map(t => (
+            <button key={t.key} onClick={() => setOrderType(t.key)}
               style={{
                 flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
                 cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
-                textTransform: "capitalize", touchAction: "manipulation",
-                background: orderType === t ? DR : SUBTLE, color: orderType === t ? "#fff" : MUTED,
+                touchAction: "manipulation",
+                background: orderType === t.key ? DR : SUBTLE, color: orderType === t.key ? "#fff" : MUTED,
               }}>
-              {t}
+              {t.label}
             </button>
           ))}
         </div>
-        {orderType === "delivery" && (
-          <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
-            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+        {orderType === "pickup_delivery" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <input value={customerName} onChange={e => setCustomerName(e.target.value)}
+              placeholder="Customer name" autoCapitalize="words"
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+            <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)} placeholder="Delivery address"
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+          </div>
         )}
       </div>
 
@@ -769,7 +828,14 @@ export default function POSView({ categories, items, setItems, orders, setOrders
           <Btn variant="ghost" onClick={clearOrder}
             style={{ flexShrink: 0, padding: isMobile ? "12px 18px" : "9px 14px" }}
             disabled={cart.length === 0}>Clear</Btn>
-          <Btn onClick={() => { setError(""); setModal("payment"); }}
+          <Btn
+            onClick={() => {
+              if (missingDeliveryInfo) {
+                setError("Customer name and delivery address are required for Pickup & Delivery orders.");
+                return;
+              }
+              setError(""); setModal("payment");
+            }}
             style={{ flex: 1, padding: isMobile ? "12px 16px" : undefined }}
             disabled={cart.length === 0 || loading || hasOverstockedItem}>
             {loading ? "Saving…" : `Pay ${fmt(total)}`}
@@ -798,6 +864,11 @@ export default function POSView({ categories, items, setItems, orders, setOrders
             type="search" autoCorrect="off"
             style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
               fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : undefined }} />
+          <Btn variant="ghost" onClick={() => setModal("scanRider")}
+            style={{ flexShrink: 0, padding: isMobile ? "11px 14px" : "8px 12px" }}
+            aria-label="Scan rider QR to mark a delivery complete">
+            🛵 Scan rider
+          </Btn>
         </div>
 
         {/* Category pills: scroll sideways on phones instead of wrapping into a tall block */}
@@ -948,18 +1019,29 @@ export default function POSView({ categories, items, setItems, orders, setOrders
         />
       )}
       {modal === "scanPromo" && (
-        <PromoScanModal
+        <QrScanModal
+          title="Scan promo QR"
+          subtitle="Point the camera at the customer's promo code."
           isMobile={isMobile}
           onClose={() => setModal(null)}
           onDetected={(text) => applyPromoCode(text)}
         />
       )}
+      {modal === "scanRider" && (
+        <QrScanModal
+          title="Scan rider QR"
+          subtitle="Point the camera at the rider slip to mark that delivery complete."
+          isMobile={isMobile}
+          onClose={() => setModal(null)}
+          onDetected={(text) => completeRiderOrder(text)}
+        />
+      )}
       {modal === "payment" && (
         <PaymentModal total={total} config={config} demoMode={demoMode} isMobile={isMobile}
-          onClose={() => setModal(null)} onPaid={handlePaid} />
+          orderType={orderType} onClose={() => setModal(null)} onPaid={handlePaid} />
       )}
       {modal === "receipt" && receipt && (
-        <ReceiptModal order={receipt} isMobile={isMobile} onClose={() => setModal(null)} />
+        <ReceiptModal order={receipt} isMobile={isMobile} onClose={closeReceipt} />
       )}
 
       {/* ── Toast ── */}

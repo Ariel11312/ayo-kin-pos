@@ -4,6 +4,7 @@ import Btn from "./btn";
 import { ErrBox, OkBox } from "./messageBox";
 import Field from "./field";
 import { useState } from "react";
+import { QRCodeCanvas } from "qrcode.react";
 
 export default function Modal({ title, onClose, children, width = 480 }) {
   return (
@@ -20,6 +21,17 @@ export default function Modal({ title, onClose, children, width = 480 }) {
 }
 export function ReceiptModal({ order, onClose }) {
   const handlePrint = () => window.print();
+
+  // Pickup & Delivery orders carry a rider QR right on the receipt, so the
+  // same slip that's handed to the customer can be scanned by the rider
+  // (via the Rider Scanner view) to close out the order. Encodes the same
+  // plain-text payload the POS's rider QR modal uses.
+  const isPickupDelivery = order.type === "pickup_delivery";
+  const riderPayload = [
+    `Order ID: ${order.id}`,
+    `Customer: ${order.customer_name || "—"}`,
+    `Address: ${order.delivery_address || "—"}`,
+  ].join("\n");
 
   return (
     <Modal title="Receipt" onClose={onClose} width={380}>
@@ -64,6 +76,7 @@ export function ReceiptModal({ order, onClose }) {
           <span><b>Order:</b> {order.id}</span>
           <span style={{ textTransform: "capitalize" }}>{order.type}</span>
         </div>
+        {order.customer_name && <div style={{ fontSize: 12, marginBottom: 4 }}><b>Customer:</b> {order.customer_name}</div>}
         {order.table_no && <div style={{ fontSize: 12, marginBottom: 4 }}><b>Table:</b> {order.table_no}</div>}
         {order.delivery_address && <div style={{ fontSize: 12, marginBottom: 4 }}><b>Address:</b> {order.delivery_address}</div>}
 
@@ -96,6 +109,20 @@ export function ReceiptModal({ order, onClose }) {
           {order.payment_ref && <div>Ref No: {order.payment_ref}</div>}
         </div>
 
+        {isPickupDelivery && (
+          <div style={{ textAlign: "center", marginTop: 18 }}>
+            <div style={{
+              display: "inline-block", padding: 8, background: "#fff",
+              border: "1px solid #ddd", borderRadius: 6, lineHeight: 0,
+            }}>
+              <QRCodeCanvas value={riderPayload} size={140} level="M" marginSize={0} />
+            </div>
+            <div style={{ fontSize: 10, color: MUTED, marginTop: 6, fontFamily: FONT }}>
+              Scan for rider pickup &amp; delivery
+            </div>
+          </div>
+        )}
+
         <div style={{ textAlign: "center", marginTop: 22, fontSize: 12, color: MUTED }}>— Thank you! Please come again. —</div>
       </div>
 
@@ -107,7 +134,7 @@ export function ReceiptModal({ order, onClose }) {
   );
 }
 
-export function PaymentModal({ total, config, demoMode, onClose, onPaid }) {
+export function PaymentModal({ total, config, demoMode, orderType, onClose, onPaid }) {
   const [method, setMethod] = useState("cash");
   const [cashGiven, setCashGiven] = useState("");
   const [ref, setRef] = useState("");
@@ -116,12 +143,16 @@ export function PaymentModal({ total, config, demoMode, onClose, onPaid }) {
   const cash = parseFloat(cashGiven) || 0;
   const change = method === "cash" ? Math.max(0, cash - total) : 0;
 
+  // Pickup & Delivery orders are paid to the rider on delivery, not at the
+  // counter — so there's no cash-in-hand to count or change to give here.
+  const isPickupDelivery = orderType === "pickup_delivery";
+
   // GCash/Card require a configured PayMongo key — locked otherwise,
   // even in demo mode.
   const onlineUnlocked = !!config?.paymongoKey;
 
   const handlePay = async () => {
-    if (method === "cash" && cash < total) { setError("Cash given is less than total amount."); return; }
+    if (method === "cash" && !isPickupDelivery && cash < total) { setError("Cash given is less than total amount."); return; }
     if (method !== "cash" && !ref && demoMode) { /* allow demo without ref */ }
     setLoading(true); setError("");
     try {
@@ -192,7 +223,16 @@ export function PaymentModal({ total, config, demoMode, onClose, onPaid }) {
           <span style={{ fontSize: 24, fontWeight: 700, color: DR }}>{fmt(total)}</span>
         </div>
 
-        {method === "cash" && (
+        {method === "cash" && isPickupDelivery && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, marginBottom: 18, padding: "12px 16px",
+            background: SUBTLE, borderRadius: 8, fontSize: 13, color: MUTED,
+          }}>
+            🛵 Cash will be collected by the rider on delivery — no amount needed here.
+          </div>
+        )}
+
+        {method === "cash" && !isPickupDelivery && (
           <>
             <Field label="Cash Given">
               <input type="number" min="0" step="0.01" value={cashGiven} onChange={e => setCashGiven(e.target.value)}
@@ -226,7 +266,7 @@ export function PaymentModal({ total, config, demoMode, onClose, onPaid }) {
 
         <div style={{ display: "flex", gap: 10 }}>
           <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }} disabled={loading}>Cancel</Btn>
-          <Btn onClick={handlePay} style={{ flex: 2 }} disabled={loading || (method === "cash" && cash < total && !!cashGiven)}>
+          <Btn onClick={handlePay} style={{ flex: 2 }} disabled={loading || (method === "cash" && !isPickupDelivery && cash < total && !!cashGiven)}>
             {loading ? "Processing…" : `Confirm ${method === "cash" ? "Cash" : method.toUpperCase()} Payment`}
           </Btn>
         </div>
