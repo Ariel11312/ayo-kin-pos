@@ -278,122 +278,46 @@ function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
-   Generic QR Scan Modal
-   Opens the device camera and reads any QR code,
-   handing the raw decoded text back to the caller.
-   Reused for both promo-code scanning and rider
-   scanning (only one is ever mounted at a time,
-   so a shared region id is safe).
+   Camera helpers for the built-in QR scanner (same logic as
+   RiderScannerView). The scanner itself lives inside POSView.
 ───────────────────────────────────────────── */
-// Give every mounted scanner its own DOM id. Reusing one fixed id for both
-// the promo and rider scanners meant a second Html5Qrcode instance could be
-// constructed on top of a node the first instance hadn't fully torn down —
-// some html5-qrcode versions throw *synchronously* from `new Html5Qrcode()`
-// or `.stop()` in that case, and an uncaught throw inside a mounted
-// component with no error boundary blanks the entire React app.
+// Every mounted scanner gets its own DOM id, so a new Html5Qrcode never
+// gets constructed on top of a node the previous one hasn't torn down.
 let qrScanInstanceCounter = 0;
 
-function QrScanModal({ title, subtitle, onDetected, onClose, isMobile }) {
-  const regionIdRef = useRef(`qr-scan-region-${++qrScanInstanceCounter}`);
-  const regionId = regionIdRef.current;
-  const scannerRef = useRef(null);
-  const [err, setErr] = useState("");
-  const [starting, setStarting] = useState(true);
+// Tracks the teardown of the most recently mounted scanner. A new scanner
+// awaits this before touching the camera, so it never races the previous
+// one for the device (closing + reopening quickly leaves the old stop() in
+// flight when the new start() fires, and start() then never settles —
+// the endless "Starting camera…").
+let cameraReleaseChain = Promise.resolve();
 
-  // Stopping a scanner that never finished starting, or stopping/clearing
-  // it twice, is what tends to throw. This helper makes teardown safe to
-  // call from both the detection handler and the unmount cleanup without
-  // letting either throw escape uncaught.
-  const safeTeardown = (html5Qr) => {
-    try {
-      const maybePromise = html5Qr.stop();
-      Promise.resolve(maybePromise)
-        .catch(() => {})
-        .finally(() => {
-          try { html5Qr.clear(); } catch { /* already cleared / never started */ }
-        });
-    } catch {
-      // stop() itself threw synchronously (e.g. scanner was never running) —
-      // still try to clear so the DOM node is left in a clean state.
-      try { html5Qr.clear(); } catch { /* ignore */ }
-    }
-  };
+// A start()/getUserMedia() that never settles is fatal to the UI. This
+// turns a silent hang into a visible error.
+const withTimeout = (promise, ms, message) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    Promise.resolve(promise).then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
 
-  useEffect(() => {
-    let cancelled = false;
-    let html5Qr;
-
-    try {
-      html5Qr = new Html5Qrcode(regionId);
-    } catch (e) {
-      setErr("Camera unavailable: " + (e?.message || String(e)));
-      setStarting(false);
-      return;
-    }
-    scannerRef.current = html5Qr;
-
-    html5Qr
-      .start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: 220 },
-        (decodedText) => {
-          if (cancelled) return;
-          cancelled = true;
-          const text = decodedText.trim();
-          // Tear down the camera first, but don't make the caller wait on
-          // it — `onDetected` (which typically closes this modal, unmounting
-          // it) can run right away. The unmount cleanup below is guarded to
-          // no-op safely if this teardown is still in flight.
-          safeTeardown(html5Qr);
-          onDetected(text);
-        },
-        () => {} // per-frame "no QR found yet" — ignore
-      )
-      .then(() => { if (!cancelled) setStarting(false); })
-      .catch((e) => {
-        if (!cancelled) setErr("Camera unavailable: " + (e?.message || String(e)));
-      });
-
-    return () => {
-      cancelled = true;
-      safeTeardown(html5Qr);
+// Safe to call any number of times, in any state (never started, mid-start,
+// already stopped). Never throws, never rejects. Resolves once the camera
+// has actually been released.
+const safeTeardown = (html5Qr) =>
+  new Promise((resolve) => {
+    const finish = () => {
+      try { Promise.resolve(html5Qr.clear()).catch(() => {}); } catch { /* already cleared */ }
+      resolve();
     };
-  }, [onDetected, regionId]);
-
-  const overlay = {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    zIndex: 9999, fontFamily: FONT, padding: 16,
-  };
-
-  const box = {
-    background: BG, borderRadius: 12, padding: 18,
-    width: isMobile ? "100%" : 380, maxWidth: "100%",
-    boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
-    boxSizing: "border-box",
-  };
-
-  return (
-    <div style={overlay} onClick={onClose}>
-      <div style={box} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>{title}</div>
-        <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
-          {subtitle}
-        </div>
-        <div id={regionId} style={{ width: "100%", minHeight: 240, borderRadius: 8, overflow: "hidden", background: "#000" }} />
-        {starting && !err && (
-          <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>Starting camera…</div>
-        )}
-        {err && (
-          <div style={{ fontSize: 12, color: "#e53e3e", marginTop: 10, fontWeight: 600 }}>⚠ {err}</div>
-        )}
-        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
-          <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        </div>
-      </div>
-    </div>
-  );
-}
+    try {
+      Promise.resolve(html5Qr.stop()).catch(() => {}).finally(finish);
+    } catch {
+      finish(); // stop() threw synchronously (scanner was never running)
+    }
+  });
 
 /* ─────────────────────────────────────────────
    Main POS View
@@ -428,6 +352,17 @@ export default function POSView({ categories, items, setItems, orders, setOrders
 
   // Mobile only: the cart lives in a sheet that slides up over the menu.
   const [cartOpen, setCartOpen] = useState(false);
+
+  // ── Built-in QR scanner (promo + rider) ──
+  // `modal` decides which scan is open; there is no separate scanner
+  // component, the camera effect and the overlay both live in POSView.
+  const scanMode = modal === "scanPromo" ? "promo" : modal === "scanRider" ? "rider" : null;
+  const [scanRegionId, setScanRegionId] = useState("pos-qr-scan-region-0");
+  const [scanErr, setScanErr] = useState("");
+  const [scanStarting, setScanStarting] = useState(true);
+  // Always points at the latest handler, so the camera effect never needs
+  // the handlers in its deps (they're new functions on every render).
+  const scanHandlerRef = useRef(null);
 
   // ── Existing-customer lookup ──
   // As the cashier types a name, we look for matching customers among past
@@ -530,6 +465,13 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     if (row.delivery_address) setDeliveryAddr(row.delivery_address);
     setCustomerSuggestions([]);
     setShowCustomerSuggestions(false);
+  };
+
+  // Each open gets its own DOM id so a new Html5Qrcode never lands on a
+  // node the previous one hasn't torn down.
+  const openScanner = (kind) => {
+    setScanRegionId(`pos-qr-scan-region-${++qrScanInstanceCounter}`);
+    setModal(kind);
   };
 
   const showToast = (msg, type = "warn") => {
@@ -688,12 +630,120 @@ export default function POSView({ categories, items, setItems, orders, setOrders
       showToast(`Order ${orderId} is already marked delivered.`, "warn"); return;
     }
 
-const { error } = await supabase.from("orders").update({ status: "completed" }).eq("id", orderId);
-if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
+    // .select() forces Supabase to return the rows it actually touched.
+    // Without it, `error` is null even when RLS silently blocks the write or
+    // the .eq("id", ...) matches zero rows — the request "succeeds" but
+    // nothing changes in the database.
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ status: "completed" })
+      .eq("id", orderId)
+      .select();
 
-setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: "completed" } : o));
-showToast(`Order ${orderId} marked as delivered.`, "warn");
+    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
+    if (!data || data.length === 0) {
+      showToast(`Order ${orderId} was not updated — check update permissions/RLS on "orders".`, "err");
+      return;
+    }
+
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...data[0] } : o));
+    showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
+
+  // Route a decoded QR to the right handler for the open scan.
+  useEffect(() => {
+    scanHandlerRef.current =
+      scanMode === "promo" ? applyPromoCode
+      : scanMode === "rider" ? completeRiderOrder
+      : null;
+  });
+
+  // Camera lifecycle — same logic as RiderScannerView's scanner.
+  useEffect(() => {
+    if (!scanMode) return;
+
+    let disposed = false;
+    let handled = false;
+    let html5Qr = null;
+    setScanErr("");
+    setScanStarting(true);
+
+    // Wait for the previous scan's camera to be released first. This promise
+    // only settles once start() has settled (or failed / timed out), so the
+    // cleanup below can safely chain a stop() after it.
+    const myTurn = cameraReleaseChain.then(async () => {
+      if (disposed) return; // closed while waiting (e.g. StrictMode)
+
+      // Explicit permission check: rejects clearly on denial / no camera /
+      // insecure origin instead of leaving start() to hang. 30s because the
+      // user may still be deciding on the browser's "Allow" prompt.
+      let stream;
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Camera access requires HTTPS or a supported browser.");
+        }
+        stream = await withTimeout(
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }),
+          30000,
+          "Camera permission request timed out."
+        );
+      } catch (e) {
+        if (!disposed) {
+          setScanErr("Camera unavailable: " + (e?.message || String(e)));
+          setScanStarting(false);
+        }
+        return;
+      }
+      stream.getTracks().forEach((t) => t.stop()); // html5-qrcode opens its own stream
+      if (disposed) return;
+
+      try {
+        html5Qr = new Html5Qrcode(scanRegionId);
+      } catch (e) {
+        if (!disposed) {
+          setScanErr("Camera unavailable: " + (e?.message || String(e)));
+          setScanStarting(false);
+        }
+        return;
+      }
+
+      try {
+        await withTimeout(
+          html5Qr.start(
+            { facingMode: "environment" },
+            { fps: 10, qrbox: 240 },
+            (decodedText) => {
+              if (disposed || handled) return; // ignore repeat frames
+              handled = true;
+              // The handler closes the scan -> effect cleanup stops the camera.
+              scanHandlerRef.current?.(decodedText.trim());
+            },
+            () => {} // per-frame "no QR found yet" — ignore
+          ),
+          10000,
+          "Camera took too long to start — try closing other apps/tabs using it."
+        );
+        if (!disposed) setScanStarting(false);
+      } catch (e) {
+        if (!disposed) {
+          setScanErr("Camera unavailable: " + (e?.message || String(e)));
+          setScanStarting(false);
+        }
+        // start() may still land after our timeout; release the device
+        // rather than leaving it locked for the next scan.
+        await safeTeardown(html5Qr);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      // Always tear down AFTER myTurn settles, never mid-start.
+      cameraReleaseChain = myTurn
+        .catch(() => {})
+        .then(() => (html5Qr ? safeTeardown(html5Qr) : undefined))
+        .catch(() => {});
+    };
+  }, [scanMode, scanRegionId]);
 
   const closeReceipt = () => {
     setModal(null);
@@ -1022,7 +1072,7 @@ showToast(`Order ${orderId} marked as delivered.`, "warn");
               />
               <Btn variant="ghost" onClick={() => applyPromoCode(promoInput)}
                 style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }}>Apply</Btn>
-              <Btn variant="ghost" onClick={() => setModal("scanPromo")}
+              <Btn variant="ghost" onClick={() => openScanner("scanPromo")}
                 style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }} aria-label="Scan promo QR">📷</Btn>
             </div>
           )}
@@ -1096,7 +1146,7 @@ showToast(`Order ${orderId} marked as delivered.`, "warn");
             type="search" autoCorrect="off"
             style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
               fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : undefined }} />
-          <Btn variant="ghost" onClick={() => setModal("scanRider")}
+          <Btn variant="ghost" onClick={() => openScanner("scanRider")}
             style={{ flexShrink: 0, padding: isMobile ? "11px 14px" : "8px 12px" }}
             aria-label="Scan rider QR to mark a delivery complete">
             🛵 Scan rider
@@ -1250,23 +1300,43 @@ showToast(`Order ${orderId} marked as delivered.`, "warn");
           onClose={handleDiscountInfoClose}
         />
       )}
-      {modal === "scanPromo" && (
-        <QrScanModal
-          title="Scan promo QR"
-          subtitle="Point the camera at the customer's promo code."
-          isMobile={isMobile}
-          onClose={() => setModal(null)}
-          onDetected={(text) => applyPromoCode(text)}
-        />
-      )}
-      {modal === "scanRider" && (
-        <QrScanModal
-          title="Scan rider QR"
-          subtitle="Point the camera at the rider slip to mark that delivery complete."
-          isMobile={isMobile}
-          onClose={() => setModal(null)}
-          onDetected={(text) => completeRiderOrder(text)}
-        />
+      {scanMode && (
+        <div
+          onClick={() => setModal(null)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            zIndex: 9999, fontFamily: FONT, padding: 16,
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: BG, borderRadius: 12, padding: 18,
+              width: isMobile ? "100%" : 400, maxWidth: "100%",
+              boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
+              boxSizing: "border-box",
+            }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>
+              {scanMode === "promo" ? "Scan promo QR" : "Scan rider QR"}
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
+              {scanMode === "promo"
+                ? "Point the camera at the customer's promo code."
+                : "Point the camera at the rider slip to mark that delivery complete."}
+            </div>
+            <div id={scanRegionId}
+              style={{ width: "100%", minHeight: 260, borderRadius: 8, overflow: "hidden", background: "#000" }} />
+            {scanStarting && !scanErr && (
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>Starting camera…</div>
+            )}
+            {scanErr && (
+              <div style={{ fontSize: 12, color: "#e53e3e", marginTop: 10, fontWeight: 600 }}>⚠ {scanErr}</div>
+            )}
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+              <Btn variant="ghost" onClick={() => setModal(null)}>Cancel</Btn>
+            </div>
+          </div>
+        </div>
       )}
       {modal === "payment" && (
         <PaymentModal total={total} config={config} demoMode={demoMode} isMobile={isMobile}
