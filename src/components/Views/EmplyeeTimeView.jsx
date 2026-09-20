@@ -86,6 +86,21 @@ function ListCard({ children, onClick, style = {} }) {
   );
 }
 
+/** Time In / Time Out pill for the TYPE column */
+function TypePill({ type }) {
+  const isIn = type === "in";
+  const color = isIn ? SUCCESS : "#DC2626";
+  return (
+    <span style={{
+      display: "inline-block", padding: "3px 10px", borderRadius: 20,
+      fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+      color, background: isIn ? SUCCESS_BG : "#FDECEA", border: `1px solid ${color}`,
+    }}>
+      {isIn ? "Time In" : "Time Out"}
+    </span>
+  );
+}
+
 /** Popup shown after every scan / manual time in-out */
 function ResultPopup({ popup, onClose, isMobile }) {
   const theme = POPUP_THEME[popup.kind] || POPUP_THEME.err;
@@ -523,7 +538,7 @@ export default function EmployeeTimeView({ demoMode }) {
                 <ListCard key={l.id}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <span style={{ fontSize: 13, fontWeight: 700 }}>{l.employees?.name || "Unknown"}</span>
-                    <Badge color={l.type === "in" ? SUCCESS : "#DC2626"}>{l.type === "in" ? "Time In" : "Time Out"}</Badge>
+                    <TypePill type={l.type} />
                   </div>
                   <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>{fmtTime(l.timestamp)}</div>
                 </ListCard>
@@ -535,7 +550,7 @@ export default function EmployeeTimeView({ demoMode }) {
                 <thead>
                   <tr style={{ background: SUBTLE, textAlign: "left" }}>
                     <th style={thStyle}>EMPLOYEE</th>
-                    <th style={thStyle}>ACTION</th>
+                    <th style={thStyle}>TYPE</th>
                     <th style={thStyle}>TIME</th>
                   </tr>
                 </thead>
@@ -547,7 +562,7 @@ export default function EmployeeTimeView({ demoMode }) {
                     <tr key={l.id} style={{ borderTop: `1px solid ${BORDER}` }}>
                       <td style={{ padding: "10px 16px" }}>{l.employees?.name || "Unknown"}</td>
                       <td style={{ padding: "10px 16px" }}>
-                        <Badge color={l.type === "in" ? SUCCESS : "#DC2626"}>{l.type === "in" ? "Time In" : "Time Out"}</Badge>
+                        <TypePill type={l.type} />
                       </td>
                       <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>{fmtTime(l.timestamp)}</td>
                     </tr>
@@ -643,7 +658,7 @@ export default function EmployeeTimeView({ demoMode }) {
               <ListCard key={l.id}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 700 }}>{l.employees?.name || "Unknown"}</span>
-                  <Badge color={l.type === "in" ? SUCCESS : "#DC2626"}>{l.type === "in" ? "Time In" : "Time Out"}</Badge>
+                  <TypePill type={l.type} />
                 </div>
                 <div style={{ fontSize: 11.5, color: MUTED, marginTop: 4 }}>
                   {fmtDate(l.timestamp)} · {fmtTime(l.timestamp)}
@@ -658,7 +673,7 @@ export default function EmployeeTimeView({ demoMode }) {
                 <tr style={{ background: SUBTLE, textAlign: "left" }}>
                   <th style={thStyle}>DATE</th>
                   <th style={thStyle}>EMPLOYEE</th>
-                  <th style={thStyle}>ACTION</th>
+                  <th style={thStyle}>TYPE</th>
                   <th style={thStyle}>TIME</th>
                 </tr>
               </thead>
@@ -671,7 +686,7 @@ export default function EmployeeTimeView({ demoMode }) {
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>{fmtDate(l.timestamp)}</td>
                     <td style={{ padding: "10px 16px" }}>{l.employees?.name || "Unknown"}</td>
                     <td style={{ padding: "10px 16px" }}>
-                      <Badge color={l.type === "in" ? SUCCESS : "#DC2626"}>{l.type === "in" ? "Time In" : "Time Out"}</Badge>
+                      <TypePill type={l.type} />
                     </td>
                     <td style={{ padding: "10px 16px", whiteSpace: "nowrap" }}>{fmtTime(l.timestamp)}</td>
                   </tr>
