@@ -16,6 +16,25 @@ const linkBtnStyle = { background: "none", border: "none", color: DR, fontFamily
 
 const thStyle = { padding: "10px 16px", fontSize: 11, color: MUTED, whiteSpace: "nowrap" };
 
+// ── Duplicate protection ──
+// The same employee can't be logged again within this window, no matter
+// whether it came from the camera or the manual button. Holding a badge in
+// front of the camera (or double-tapping a button) used to write a new row
+// every time.
+const MIN_GAP_MS = 60 * 1000;
+// How long the result popup stays up before closing itself.
+const POPUP_MS = 4000;
+// While the popup is open (and for a moment after) the scanner ignores
+// every QR it sees.
+const SCAN_RELEASE_DELAY_MS = 800;
+
+const POPUP_THEME = {
+  in:   { icon: "✅", color: SUCCESS,   bg: SUCCESS_BG },
+  out:  { icon: "👋", color: "#92400E", bg: "#FEF3C7" },
+  warn: { icon: "⏳", color: "#92400E", bg: "#FEF3C7" },
+  err:  { icon: "⚠️", color: "#B91C1C", bg: "#FDECEA" },
+};
+
 function genCode() {
   return "EMP-" + Math.floor(1000 + Math.random() * 9000);
 }
@@ -67,6 +86,53 @@ function ListCard({ children, onClick, style = {} }) {
   );
 }
 
+/** Popup shown after every scan / manual time in-out */
+function ResultPopup({ popup, onClose, isMobile }) {
+  const theme = POPUP_THEME[popup.kind] || POPUP_THEME.err;
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        zIndex: 10000, fontFamily: FONT, padding: 16,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: "#fff", borderRadius: 14, padding: isMobile ? "24px 20px" : "28px 32px",
+          width: isMobile ? "100%" : 360, maxWidth: "100%", boxSizing: "border-box",
+          textAlign: "center", boxShadow: "0 12px 48px rgba(0,0,0,0.3)",
+          border: `2px solid ${theme.color}`,
+        }}
+      >
+        <div style={{
+          width: 72, height: 72, borderRadius: "50%", background: theme.bg,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 34, margin: "0 auto 14px",
+        }}>
+          {theme.icon}
+        </div>
+        <div style={{ fontSize: 19, fontWeight: 800, color: theme.color, marginBottom: 4 }}>
+          {popup.title}
+        </div>
+        {popup.name && (
+          <div style={{ fontSize: 16, fontWeight: 700, color: TEXT, marginBottom: 4 }}>{popup.name}</div>
+        )}
+        {popup.message && (
+          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5, marginBottom: 4 }}>{popup.message}</div>
+        )}
+        {popup.time && (
+          <div style={{ fontSize: 12.5, color: MUTED }}>{popup.time}</div>
+        )}
+        <Btn onClick={onClose} style={{ width: "100%", minHeight: 44, marginTop: 18 }}>OK</Btn>
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 8 }}>Closes automatically</div>
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeeTimeView({ demoMode }) {
   const isMobile = useIsMobile();
 
@@ -82,11 +148,26 @@ export default function EmployeeTimeView({ demoMode }) {
   const [form, setForm] = useState({ name: "", position: "", code: "", active: true });
 
   const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState(null); // {name, action, time}
+  const [popup, setPopup] = useState(null); // {kind, title, name, message, time, id}
+  const [busy, setBusy] = useState(false);  // disables the manual buttons mid-request
+
   const scannerRef = useRef(null);
-  const scanCooldown = useRef(false);
   const employeesRef = useRef(employees);
   employeesRef.current = employees;
+
+  // The QR scanner is created once per "Start Scanner" click, so its
+  // callback would otherwise keep using the `logs` / `clockAction` from that
+  // moment forever (stale closure) — every scan would think the employee
+  // was still "out" and log another "in". The callback goes through these
+  // refs, which always point at the latest values.
+  const logsRef = useRef(logs);
+  const handleScanRef = useRef(null);
+  // true  = a scan is being handled / its popup is open → ignore all QR frames
+  const scanLockRef = useRef(false);
+  // true  = a time log is being written right now → no second write allowed
+  const busyRef = useRef(false);
+
+  useEffect(() => { logsRef.current = logs; }, [logs]);
 
   async function refresh() {
     const [emp, lg] = await Promise.all([getEmployees(), getTimeLogs()]);
@@ -95,29 +176,126 @@ export default function EmployeeTimeView({ demoMode }) {
   }
   useEffect(() => { refresh(); }, []);
 
-  function statusFor(employeeId) {
-    const empLogs = logs
+  function lastLogFor(employeeId, list) {
+    return list
       .filter(l => l.employee_id === employeeId)
-      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-    if (!empLogs.length) return "out";
-    return empLogs[0].type === "in" ? "in" : "out";
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0] || null;
   }
 
+  function statusFor(employeeId) {
+    const last = lastLogFor(employeeId, logs);
+    return last && last.type === "in" ? "in" : "out";
+  }
+
+  // ── Popup ──
+  function showPopup(p) {
+    setPopup({ ...p, id: Date.now() });
+  }
+  function closePopup() {
+    setPopup(null);
+    // Small delay so the badge that's still in front of the camera isn't
+    // read again the instant the popup disappears.
+    setTimeout(() => { scanLockRef.current = false; }, SCAN_RELEASE_DELAY_MS);
+  }
+  useEffect(() => {
+    if (!popup) return;
+    const t = setTimeout(closePopup, POPUP_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [popup]);
+
   async function clockAction(employee) {
-    const nextType = statusFor(employee.id) === "in" ? "out" : "in";
+    if (busyRef.current) return; // a write is already in flight
+    busyRef.current = true;
+    setBusy(true);
     try {
+      const last = lastLogFor(employee.id, logsRef.current);
+
+      // Same employee logged a moment ago → don't write another row.
+      if (last) {
+        const elapsed = Date.now() - new Date(last.timestamp).getTime();
+        if (elapsed >= 0 && elapsed < MIN_GAP_MS) {
+          const wait = Math.ceil((MIN_GAP_MS - elapsed) / 1000);
+          showPopup({
+            kind: "warn",
+            title: "Already recorded",
+            name: employee.name,
+            message: `Timed ${last.type === "in" ? "in" : "out"} at ${fmtTime(last.timestamp)}. Please wait ${wait}s before scanning again.`,
+          });
+          return;
+        }
+      }
+
+      const nextType = last && last.type === "in" ? "out" : "in";
       const newLog = await logTime(employee.id, nextType);
-      setLogs(prev => [{ ...newLog, employees: { name: employee.name, code: employee.code } }, ...prev]);
-      setScanResult({ name: employee.name, action: nextType, time: new Date() });
+      const entry = {
+        ...newLog,
+        timestamp: newLog?.timestamp || new Date().toISOString(),
+        employees: { name: employee.name, code: employee.code },
+      };
+
+      // Update the ref immediately (state updates are async) so a scan
+      // arriving a split-second later already sees this log.
+      logsRef.current = [entry, ...logsRef.current];
+      setLogs(prev => [entry, ...prev]);
+
       setError("");
+      showPopup({
+        kind: nextType,
+        title: nextType === "in" ? "Timed In" : "Timed Out",
+        name: employee.name,
+        time: new Date().toLocaleString("en-PH", {
+          month: "short", day: "numeric", year: "numeric",
+          hour: "2-digit", minute: "2-digit", second: "2-digit",
+        }),
+      });
     } catch (e) {
-      setError(e.message || "Failed to log time");
+      showPopup({
+        kind: "err",
+        title: "Could not save",
+        name: employee.name,
+        message: e.message || "Failed to log time",
+      });
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
     }
   }
+
+  // Called once per accepted scan (see the scanner effect below).
+  async function handleScan(rawText) {
+    try {
+      const code = (rawText || "").trim();
+      const emp = employeesRef.current.find(e => e.code === code);
+      if (!emp) {
+        showPopup({
+          kind: "err",
+          title: "QR not recognized",
+          message: "This QR code isn't linked to any employee.",
+        });
+        return;
+      }
+      if (!emp.active) {
+        showPopup({
+          kind: "err",
+          title: "Employee inactive",
+          name: emp.name,
+          message: "This employee has been deactivated. Please ask an admin.",
+        });
+        return;
+      }
+      await clockAction(emp);
+    } catch (e) {
+      showPopup({ kind: "err", title: "Scan failed", message: e.message || "Something went wrong." });
+    }
+  }
+  handleScanRef.current = handleScan;
 
   // ── QR Scanner lifecycle ──
   useEffect(() => {
     if (!scanning) return;
+    scanLockRef.current = false;
+
     // Smaller scan box on phones so the camera preview fits the screen
     const box = Math.min(240, Math.round((typeof window !== "undefined" ? window.innerWidth : 360) * 0.62));
     const scanner = new Html5QrcodeScanner("qr-reader", { fps: 10, qrbox: box }, false);
@@ -125,21 +303,17 @@ export default function EmployeeTimeView({ demoMode }) {
 
     scanner.render(
       (decodedText) => {
-        if (scanCooldown.current) return;
-        scanCooldown.current = true;
-        const emp = employeesRef.current.find(e => e.code === decodedText.trim());
-        if (emp) {
-          clockAction(emp);
-        } else {
-          setError("QR code not recognized — not linked to any employee.");
-        }
-        setTimeout(() => { scanCooldown.current = false; }, 2500);
+        // Ignore every frame while a scan is being handled or its popup is
+        // open. Without this the camera re-reads the same badge ~10x/second
+        // and each read wrote a new time log.
+        if (scanLockRef.current || busyRef.current) return;
+        scanLockRef.current = true; // released by closePopup()
+        handleScanRef.current?.(decodedText);
       },
       () => { /* ignore per-frame scan misses */ }
     );
 
     return () => { scanner.clear().catch(() => {}); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scanning]);
 
   function openAddEmployee() {
@@ -240,7 +414,7 @@ export default function EmployeeTimeView({ demoMode }) {
         {tabs.map(t => (
           <button
             key={t.key}
-            onClick={() => { setTab(t.key); setScanning(false); setScanResult(null); }}
+            onClick={() => { setTab(t.key); setScanning(false); closePopup(); }}
             style={{
               padding: "9px 16px", borderRadius: 20, border: `1px solid ${tab === t.key ? DR : BORDER}`,
               background: tab === t.key ? DR : "#fff", color: tab === t.key ? "#fff" : TEXT,
@@ -266,7 +440,7 @@ export default function EmployeeTimeView({ demoMode }) {
                 <div style={{ fontSize: 13, color: MUTED, marginBottom: 18, lineHeight: 1.5 }}>
                   Employees scan their badge to time in or out automatically.
                 </div>
-                <Btn onClick={() => { setScanResult(null); setError(""); setScanning(true); }}
+                <Btn onClick={() => { setError(""); setScanning(true); }}
                   style={{ width: isMobile ? "100%" : undefined, minHeight: 44 }}>
                   Start Scanner
                 </Btn>
@@ -279,23 +453,6 @@ export default function EmployeeTimeView({ demoMode }) {
                     style={{ width: isMobile ? "100%" : undefined, minHeight: 44 }}>
                     Stop Scanner
                   </Btn>
-                </div>
-              </div>
-            )}
-
-            {scanResult && (
-              <div
-                style={{
-                  marginTop: 18, padding: "16px 18px", borderRadius: 10,
-                  background: scanResult.action === "in" ? SUCCESS_BG : "#FEF3C7",
-                  border: `1px solid ${scanResult.action === "in" ? SUCCESS : "#F59E0B"}`,
-                }}
-              >
-                <div style={{ fontSize: 13.5, fontWeight: 800, color: scanResult.action === "in" ? SUCCESS : "#92400E" }}>
-                  {scanResult.name} — Timed {scanResult.action === "in" ? "In" : "Out"}
-                </div>
-                <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  {scanResult.time.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </div>
               </div>
             )}
@@ -318,6 +475,7 @@ export default function EmployeeTimeView({ demoMode }) {
                     </div>
                     <Btn
                       onClick={() => clockAction(emp)}
+                      disabled={busy}
                       style={{ background: status === "in" ? "#DC2626" : SUCCESS, padding: "9px 14px", fontSize: 11.5, minHeight: 40, flexShrink: 0 }}
                     >
                       {status === "in" ? "Time Out" : "Time In"}
@@ -576,6 +734,9 @@ export default function EmployeeTimeView({ demoMode }) {
           </div>
         </Modal>
       )}
+
+      {/* Result popup — every scan / manual time in-out ends up here */}
+      {popup && <ResultPopup popup={popup} onClose={closePopup} isMobile={isMobile} />}
     </div>
   );
 }
