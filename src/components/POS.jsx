@@ -103,11 +103,12 @@ export default function App() {
     { key: "calendar", emoji: "📅", label: "Calendar" },
   ];
 
-  const todaySales = orders
-    ? orders
-      .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === new Date().toDateString())
-      .reduce((s, o) => s + o.total, 0)
-    : 0;
+// Replace the todaySales calculation with this:
+const todaySales = orders
+  ? orders
+    .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === clock.toDateString())
+    .reduce((s, o) => s + o.total, 0)
+  : 0;
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>

@@ -27,10 +27,67 @@ const EMPTY_FORM = { type: "", idNo: "", name: "", address: "" };
 const TABLE_HEADERS = ["Order ID", "Time", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
 const CENTER_FROM_INDEX = TABLE_HEADERS.indexOf("Items");
 
+// ── Date-range (sales period) filter options ──────────────
+// Each entry drives one filter button plus the label shown next to the
+// sales total in the page header (e.g. "Today's sales", "This week's sales").
+const DATE_FILTERS = [
+  { key: "today",     label: "Today",      headerLabel: "Today's"      },
+  { key: "yesterday", label: "Yesterday",  headerLabel: "Yesterday's"  },
+  { key: "week",      label: "This Week",  headerLabel: "This week's"  },
+  { key: "month",     label: "This Month", headerLabel: "This month's" },
+  { key: "year",      label: "This Year",  headerLabel: "This year's"  },
+  { key: "all",       label: "All Time",   headerLabel: "All-time"     },
+];
+
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+
+// Returns { start, end } (end exclusive) for a given filter key, or null
+// for "all" (meaning: no bound, include everything). All boundaries are
+// computed from the browser's local time, so the cutoff lines up with
+// whatever "today"/"this week" etc. mean for whoever is using the till.
+function getDateRange(filterKey) {
+  const now = new Date();
+  const todayStart = startOfDay(now);
+
+  switch (filterKey) {
+    case "today": {
+      const start = todayStart;
+      const end = new Date(start); end.setDate(end.getDate() + 1);
+      return { start, end };
+    }
+    case "yesterday": {
+      const start = new Date(todayStart); start.setDate(start.getDate() - 1);
+      const end = todayStart;
+      return { start, end };
+    }
+    case "week": {
+      // Monday-start week
+      const day = now.getDay(); // 0 = Sun, 1 = Mon, ...
+      const diffToMonday = day === 0 ? -6 : 1 - day;
+      const start = new Date(todayStart); start.setDate(start.getDate() + diffToMonday);
+      const end = new Date(start); end.setDate(end.getDate() + 7);
+      return { start, end };
+    }
+    case "month": {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      return { start, end };
+    }
+    case "year": {
+      const start = new Date(now.getFullYear(), 0, 1);
+      const end = new Date(now.getFullYear() + 1, 0, 1);
+      return { start, end };
+    }
+    default: // "all"
+      return null;
+  }
+}
+
 export default function OrdersView({ orders, setOrders }) {
   const isMobile = useIsMobile();
 
   const [filter, setFilter]           = useState("all");
+  const [dateFilter, setDateFilter]   = useState("today"); // today | yesterday | week | month | year | all
   const [search, setSearch]           = useState("");
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [confirmModal, setConfirmModal]   = useState(null);
@@ -121,24 +178,30 @@ export default function OrdersView({ orders, setOrders }) {
   };
 
   // ── Derived data ───────────────────────────────────────
-  const todayOrders = orders.filter(o =>
-    new Date(o.created_at).toDateString() === new Date().toDateString()
-  );
-  const todaySales = todayOrders
+  // Period filter (today / yesterday / week / month / year / all) narrows
+  // the order set first; status filter + search then apply on top of that.
+  const dateRange = getDateRange(dateFilter);
+  const periodOrders = orders.filter(o => {
+    if (!dateRange) return true; // "all"
+    const d = new Date(o.created_at);
+    return d >= dateRange.start && d < dateRange.end;
+  });
+  const periodSales = periodOrders
     .filter(o => o.status === "completed")
     .reduce((s, o) => s + o.total, 0);
+  const headerLabel = DATE_FILTERS.find(f => f.key === dateFilter)?.headerLabel || "Today's";
 
-  const visible = orders.filter(o => {
+  const visible = periodOrders.filter(o => {
     const matchStatus = filter === "all" || o.status === filter;
     const matchSearch = !search || o.id.toLowerCase().includes(search.toLowerCase());
     return matchStatus && matchSearch;
   });
 
   const summaries = [
-    { label: "All Orders", value: orders.length,                                         color: TEXT      },
-    { label: "Completed",  value: orders.filter(o => o.status === "completed").length,   color: SUCCESS   },
-    { label: "Voided",     value: orders.filter(o => o.status === "voided").length,      color: DR        },
-    { label: "Refunded",   value: orders.filter(o => o.status === "refunded").length,    color: "#92400E" },
+    { label: "All Orders", value: periodOrders.length,                                         color: TEXT      },
+    { label: "Completed",  value: periodOrders.filter(o => o.status === "completed").length,   color: SUCCESS   },
+    { label: "Voided",     value: periodOrders.filter(o => o.status === "voided").length,      color: DR        },
+    { label: "Refunded",   value: periodOrders.filter(o => o.status === "refunded").length,    color: "#92400E" },
   ];
 
   // ── Remove discount (restore original total) ──────────
@@ -282,9 +345,9 @@ export default function OrdersView({ orders, setOrders }) {
         <div>
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Orders</h2>
           <p style={{ margin: "4px 0 0", color: MUTED, fontSize: 13 }}>
-            Today's sales:{" "}
-            <strong style={{ color: DR }}>{fmt(todaySales)}</strong>{" "}
-            from {todayOrders.filter(o => o.status === "completed").length} orders
+            {headerLabel} sales:{" "}
+            <strong style={{ color: DR }}>{fmt(periodSales)}</strong>{" "}
+            from {periodOrders.filter(o => o.status === "completed").length} orders
           </p>
         </div>
       </div>
@@ -303,6 +366,29 @@ export default function OrdersView({ orders, setOrders }) {
             </div>
             <div style={{ fontSize: isMobile ? 20 : 26, fontWeight: 800, color: s.color }}>{s.value}</div>
           </div>
+        ))}
+      </div>
+
+      {/* Date period filter (Today / Yesterday / This Week / This Month / This Year / All Time) */}
+      <div style={{
+        display: "flex", gap: 6, marginBottom: 10, flexShrink: 0,
+        overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none",
+      }}>
+        {DATE_FILTERS.map(f => (
+          <button
+            key={f.key}
+            onClick={() => setDateFilter(f.key)}
+            style={{
+              padding: isMobile ? "9px 14px" : "6px 13px",
+              borderRadius: 6, border: "none", cursor: "pointer",
+              fontFamily: FONT, fontSize: 12, fontWeight: 700,
+              whiteSpace: "nowrap", flexShrink: 0, touchAction: "manipulation",
+              background: dateFilter === f.key ? DR : SUBTLE,
+              color:      dateFilter === f.key ? "#fff" : MUTED,
+            }}
+          >
+            {f.label}
+          </button>
         ))}
       </div>
 
