@@ -208,23 +208,62 @@ export default function OrdersView({ orders, setOrders }) {
   // Prints exactly what's on screen — respects the active period filter
   // (Today/This Week/etc.), status filter, and search box — plus a totals
   // summary for the whole period at the bottom.
+  // Pull a readable name/qty/line-total out of an order item regardless of
+  // which field names the item objects actually use — different parts of
+  // the app may have written items with slightly different shapes over time.
+  function itemFields(it) {
+    const name  = it.name || it.item_name || it.product_name || it.service || "Item";
+    const qty   = it.qty ?? it.quantity ?? 1;
+    const price = it.price ?? it.unit_price ?? 0;
+    const line  = it.total ?? it.subtotal ?? (price * qty);
+    return { name, qty, line };
+  }
+
   function printOrders() {
     const now = new Date();
     const dateStr = now.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
     const timeStr = now.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
 
-    const rowsHtml = visible.map(o => {
+    const orderBlocksHtml = visible.map(o => {
       const time = new Date(o.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
-      const disc = o.discount_type ? DISCOUNT_META[o.discount_type].label : "—";
+      const dm   = DISCOUNT_META[o.discount_type];
+
+      const itemsHtml = (o.items || []).map(it => {
+        const { name, qty, line } = itemFields(it);
+        return `
+          <tr>
+            <td>${qty} × ${name}</td>
+            <td style="text-align:right">${fmt(line)}</td>
+          </tr>`;
+      }).join("");
+
+      const customerHtml = [
+        o.customer_name    ? `<div>Customer: <strong>${o.customer_name}</strong></div>` : "",
+        o.contact_number   ? `<div>Contact: ${o.contact_number}</div>` : "",
+        o.delivery_address ? `<div>Address: ${o.delivery_address}</div>` : "",
+      ].join("");
+
+      const totalsHtml = o.subtotal
+        ? `
+          <div>Subtotal: ${fmt(o.subtotal)}</div>
+          <div>${dm ? dm.label : "Discount"}: -${fmt(o.discount)}</div>
+          <div><strong>Total: ${fmt(o.total)}</strong></div>`
+        : `<div><strong>Total: ${fmt(o.total)}</strong></div>`;
+
       return `
-        <tr>
-          <td>${o.id}</td>
-          <td style="text-align:center">${time}</td>
-          <td style="text-align:center">${o.items.length}</td>
-          <td style="text-align:right">${fmt(o.total)}</td>
-          <td style="text-align:center">${disc}</td>
-          <td style="text-align:right">${o.status.toUpperCase()}</td>
-        </tr>`;
+        <div class="order-block">
+          <div class="order-head">
+            <span><strong>${o.id}</strong></span>
+            <span>${time}</span>
+          </div>
+          <div class="order-meta">${o.type} · ${o.payment_method?.toUpperCase() || "—"} · ${o.status.toUpperCase()}</div>
+          ${customerHtml ? `<div class="customer">${customerHtml}</div>` : ""}
+          <table class="items">
+            <tbody>${itemsHtml}</tbody>
+          </table>
+          <div class="order-totals">${totalsHtml}</div>
+        </div>
+        <div class="line"></div>`;
     }).join("");
 
     const completedCount = periodOrders.filter(o => o.status === "completed").length;
@@ -239,11 +278,15 @@ export default function OrdersView({ orders, setOrders }) {
             body { font-family: 'Courier New', monospace; width: 320px; margin: 0 auto; padding: 10px; font-size: 12px; }
             h2 { text-align: center; margin: 4px 0; font-size: 14px; }
             .sub { text-align: center; font-size: 11px; margin-bottom: 4px; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-            th, td { padding: 3px 2px; font-size: 10px; }
-            th { border-bottom: 1px dashed #000; text-align: left; }
-            .line { border-top: 1px dashed #000; margin: 8px 0; }
-            .totals { margin-top: 8px; font-size: 12px; line-height: 1.6; }
+            .line { border-top: 1px dashed #000; margin: 10px 0; }
+            .order-head { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
+            .order-meta { font-size: 10px; color: #333; text-transform: uppercase; margin-bottom: 4px; }
+            .customer { font-size: 11px; margin-bottom: 6px; line-height: 1.5; }
+            table.items { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+            table.items td { padding: 2px 0; font-size: 11px; }
+            .order-totals { font-size: 11px; line-height: 1.5; text-align: right; border-top: 1px dashed #999; padding-top: 4px; }
+            .order-totals strong { font-size: 13px; }
+            .totals { margin-top: 4px; font-size: 12px; line-height: 1.6; }
             .totals strong { font-size: 13px; }
           </style>
         </head>
@@ -253,13 +296,7 @@ export default function OrdersView({ orders, setOrders }) {
           ${filter !== "all" ? `<div class="sub">Status filter: ${filter}</div>` : ""}
           ${search ? `<div class="sub">Search: "${search}"</div>` : ""}
           <div class="line"></div>
-          <table>
-            <thead>
-              <tr><th>Order</th><th style="text-align:center">Time</th><th style="text-align:center">Qty</th><th style="text-align:right">Total</th><th style="text-align:center">Disc</th><th style="text-align:right">Status</th></tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-          <div class="line"></div>
+          ${orderBlocksHtml || `<div class="sub">No orders to show.</div>`}
           <div class="totals">
             Orders shown: ${visible.length}<br/>
             Period total: ${periodOrders.length} · Completed: ${completedCount} · Voided: ${voidedCount} · Refunded: ${refundedCount}<br/>
