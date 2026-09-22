@@ -47,14 +47,38 @@ const EMPTY_FORM = {
   notes: "",
 };
 
-const isSameDay = (dateStr, ref) => {
-  if (!dateStr) return false;
-  const d = new Date(dateStr);
+// ── Robust date helpers ───────────────────────────────────
+// Orders can come from different schemas/exports where the
+// timestamp field isn't always called "created_at". Try the
+// common candidates in order so "Sales Today" doesn't silently
+// show ₱0 just because the field name doesn't match.
+const ORDER_DATE_FIELDS = ["created_at", "createdAt", "date", "order_date", "inserted_at", "updated_at"];
+
+function getOrderDate(order) {
+  for (const field of ORDER_DATE_FIELDS) {
+    const v = order?.[field];
+    if (v) {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return d;
+    }
+  }
+  return null;
+}
+
+// Status values can come back with inconsistent casing ("completed"
+// vs "Completed"), so normalize before comparing.
+const isCompleted = (order) => (order?.status || "").toString().trim().toLowerCase() === "completed";
+
+const isSameDay = (date, ref) => {
+  if (!date) return false;
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return false;
   return d.toDateString() === ref.toDateString();
 };
-const isSameMonth = (dateStr, ref) => {
-  if (!dateStr) return false;
-  const d = new Date(dateStr);
+const isSameMonth = (date, ref) => {
+  if (!date) return false;
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return false;
   return d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear();
 };
 
@@ -86,12 +110,60 @@ function StatusPill({ status }) {
   );
 }
 
-export default function ExpensesView({ orders = [] }) {
+export default function ExpensesView({ orders: ordersProp = [] }) {
   const isMobile = useIsMobile();
 
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // ── Orders: fetched directly instead of trusting the parent's
+  // "orders" prop, since that prop was found to be stale/out of
+  // sync with the rest of the app (Orders Today / Sales Today
+  // showed 0 here while the sidebar showed real numbers). This
+  // guarantees the KPI cards always reflect the live orders table.
+  const [ownOrders, setOwnOrders] = useState(null); // null = not loaded yet
+  const [ordersError, setOrdersError] = useState(null);
+
+  async function fetchOrders() {
+    try {
+      const { data, error, count } = await supabase.from("orders").select("*", { count: "exact" });
+      if (error) throw error;
+      // eslint-disable-next-line no-console
+      console.log(`[ExpensesView] orders fetch: ${data?.length ?? 0} rows (count=${count})`, data?.slice(0, 2));
+      setOwnOrders(data || []);
+    } catch (e) {
+      setOrdersError(e.message);
+      setOwnOrders([]);
+    }
+  }
+
+  useEffect(() => {
+    fetchOrders();
+
+    const channel = supabase
+      .channel("orders-live-expenses")
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, (payload) => {
+        const { eventType, new: newRow, old: oldRow } = payload;
+        setOwnOrders((prev) => {
+          const list = prev || [];
+          if (eventType === "INSERT") {
+            if (list.some((o) => o.id === newRow.id)) return list;
+            return [newRow, ...list];
+          }
+          if (eventType === "UPDATE") return list.map((o) => (o.id === newRow.id ? { ...o, ...newRow } : o));
+          if (eventType === "DELETE") return list.filter((o) => o.id !== oldRow.id);
+          return list;
+        });
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  // Prefer the freshly-fetched orders; fall back to the prop only
+  // if our own fetch hasn't resolved yet (avoids a flash of zeros).
+  const orders = ownOrders !== null ? ownOrders : ordersProp;
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -158,17 +230,19 @@ export default function ExpensesView({ orders = [] }) {
   const now = new Date();
 
   const kpis = useMemo(() => {
-    const completedOrders = orders.filter((o) => o.status === "completed");
+    // Only orders explicitly marked "completed" count toward sales
+    // (case-insensitive, since status casing has been inconsistent).
+    const completedOrders = orders.filter(isCompleted);
 
-    const ordersToday = orders.filter((o) => isSameDay(o.created_at, now));
-    const salesToday = completedOrders
-      .filter((o) => isSameDay(o.created_at, now))
-      .reduce((s, o) => s + (o.total || 0), 0);
+    const ordersToday = orders.filter((o) => isSameDay(getOrderDate(o), now));
 
-    const ordersThisMonth = orders.filter((o) => isSameMonth(o.created_at, now));
-    const salesThisMonth = completedOrders
-      .filter((o) => isSameMonth(o.created_at, now))
-      .reduce((s, o) => s + (o.total || 0), 0);
+    // Every completed order whose date falls on today gets summed here.
+    const completedToday = completedOrders.filter((o) => isSameDay(getOrderDate(o), now));
+    const salesToday = completedToday.reduce((s, o) => s + (Number(o.total) || 0), 0);
+
+    const ordersThisMonth = orders.filter((o) => isSameMonth(getOrderDate(o), now));
+    const completedThisMonth = completedOrders.filter((o) => isSameMonth(getOrderDate(o), now));
+    const salesThisMonth = completedThisMonth.reduce((s, o) => s + (Number(o.total) || 0), 0);
 
     const collectedToday = expenses
       .filter((e) => e.status === "paid" && isSameDay(e.date, now))
@@ -186,6 +260,7 @@ export default function ExpensesView({ orders = [] }) {
 
     return {
       ordersToday: ordersToday.length,
+      completedOrdersToday: completedToday.length,
       salesToday,
       collectedToday,
       outstandingBalance,
@@ -350,7 +425,7 @@ export default function ExpensesView({ orders = [] }) {
     { key: "all", label: "All Time" },
   ];
 
-  if (loading && expenses.length === 0) {
+  if ((loading && expenses.length === 0) || ownOrders === null) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", minHeight: 240, fontFamily: FONT, color: MUTED, padding: 20, textAlign: "center" }}>
         <h3>Loading expenses...</h3>
@@ -372,6 +447,19 @@ export default function ExpensesView({ orders = [] }) {
       boxSizing: "border-box", display: "flex", flexDirection: "column",
       overflow: "hidden", fontFamily: FONT,
     }}>
+
+      {ordersError && (
+        <div style={{ background: "#FDECEA", color: "#C0392B", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12, flexShrink: 0 }}>
+          ⚠ Couldn't load orders for KPI cards: {ordersError}
+        </div>
+      )}
+      {!ordersError && ownOrders !== null && ownOrders.length === 0 && (
+        <div style={{ background: "#FEF3CD", color: "#B7770D", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12, flexShrink: 0 }}>
+          ⚠ 0 orders came back from the database for this view, even though the sidebar shows real sales.
+          This is a Row Level Security (RLS) policy on the <code>orders</code> table silently filtering out rows
+          for the current role — not a bug in this component. Check Supabase → Authentication/Database → Policies → orders.
+        </div>
+      )}
 
       {/* ── Header ─────────────────────────────────────────── */}
       <div style={{
@@ -398,7 +486,7 @@ export default function ExpensesView({ orders = [] }) {
         gap: isMobile ? 8 : 12,
       }}>
         <KpiCard isMobile={isMobile} label="Orders Today" value={kpis.ordersToday} color={TEXT} />
-        <KpiCard isMobile={isMobile} label="Sales Today" value={fmt(kpis.salesToday)} color={SUCCESS} />
+        <KpiCard isMobile={isMobile} label="Sales Today" value={fmt(kpis.salesToday)} color={SUCCESS} sub={`${kpis.completedOrdersToday} completed order${kpis.completedOrdersToday !== 1 ? "s" : ""}`} />
         <KpiCard isMobile={isMobile} label="Collected Today" value={fmt(kpis.collectedToday)} color="#2980B9" sub="Expenses paid today" />
         <KpiCard isMobile={isMobile} label="Outstanding Balance" value={fmt(kpis.outstandingBalance)} color="#C0392B" sub="Unpaid / overdue" />
         <KpiCard isMobile={isMobile} label="Orders This Month" value={kpis.ordersThisMonth} color={TEXT} />
