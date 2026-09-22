@@ -100,6 +100,13 @@ const parseRiderOrderId = (decodedText) => {
   return match ? match[1] : null;
 };
 
+// Pulls the order id back out of a receipt's "Pay Later" confirmation QR,
+// which ReceiptModal encodes as "PAYLATER-CONFIRM:<order id>".
+const parsePayLaterOrderId = (decodedText) => {
+  const match = (decodedText || "").trim().match(/^PAYLATER-CONFIRM:(\S+)$/i);
+  return match ? match[1] : null;
+};
+
 // Minimum characters typed before we bother querying past orders for a
 // matching customer, and how long to wait after the last keystroke.
 const CUSTOMER_SEARCH_MIN_CHARS = 2;
@@ -356,7 +363,11 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   // ── Built-in QR scanner (promo + rider) ──
   // `modal` decides which scan is open; there is no separate scanner
   // component, the camera effect and the overlay both live in POSView.
-  const scanMode = modal === "scanPromo" ? "promo" : modal === "scanRider" ? "rider" : null;
+  const scanMode =
+    modal === "scanPromo" ? "promo"
+    : modal === "scanRider" ? "rider"
+    : modal === "scanPayLater" ? "paylater"
+    : null;
   const [scanRegionId, setScanRegionId] = useState("pos-qr-scan-region-0");
   const [scanErr, setScanErr] = useState("");
   const [scanStarting, setScanStarting] = useState(true);
@@ -650,11 +661,48 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
 
+  /* Scan a receipt's "Pay Later" QR to confirm the customer has now paid.
+     Flips a pending pay-later order to "completed" — same local-first,
+     then-persist pattern as completeRiderOrder above. */
+  const completePayLaterOrder = async (decodedText) => {
+    setModal(null);
+    const orderId = parsePayLaterOrderId(decodedText);
+    if (!orderId) { showToast("QR code not recognized as a Pay Later confirmation.", "err"); return; }
+
+    const order = orders.find(o => o.id === orderId);
+    if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
+    if (order.payment_method !== "pay_later") {
+      showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return;
+    }
+    if (order.status === "completed") {
+      showToast(`Order ${orderId} is already marked as paid.`, "warn"); return;
+    }
+
+    // .select() forces Supabase to return the rows it actually touched, so
+    // a silently-blocked RLS write or a zero-row match surfaces as an error
+    // here instead of a false "success".
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ status: "completed" })
+      .eq("id", orderId)
+      .select();
+
+    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
+    if (!data || data.length === 0) {
+      showToast(`Order ${orderId} was not updated — check update permissions/RLS on "orders".`, "err");
+      return;
+    }
+
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...data[0] } : o));
+    showToast(`Order ${orderId} marked as paid.`, "warn");
+  };
+
   // Route a decoded QR to the right handler for the open scan.
   useEffect(() => {
     scanHandlerRef.current =
       scanMode === "promo" ? applyPromoCode
       : scanMode === "rider" ? completeRiderOrder
+      : scanMode === "paylater" ? completePayLaterOrder
       : null;
   });
 
@@ -749,10 +797,25 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     setModal(null);
   };
 
+  /* ── Payment handling ──
+     Status priority:
+       1. "Pay Later" was chosen (method === "pay_later")  -> ALWAYS "pending",
+          no matter what the order type is. The customer owes money, so the
+          order can't be treated as settled/completed yet.
+       2. Otherwise, Pickup & Delivery orders stay "pending" until a rider
+          scans the slip as delivered.
+       3. Otherwise (a normal, already-paid Walk-in order) -> "completed".
+  */
   const handlePaid = async (method, ref) => {
     setLoading(true); setError("");
     try {
-      const status = orderType === "pickup_delivery" ? "pending" : "completed";
+      const status =
+        method === "pay_later"
+          ? "pending"
+          : orderType === "pickup_delivery"
+            ? "pending"
+            : "completed";
+
       const order = {
         id: genId(), type: orderType, customer_name: customerName,
         contact_number: formatContactForSave(contactNumber),
@@ -1151,6 +1214,11 @@ export default function POSView({ categories, items, setItems, orders, setOrders
             aria-label="Scan rider QR to mark a delivery complete">
             🛵 Scan rider
           </Btn>
+          <Btn variant="ghost" onClick={() => openScanner("scanPayLater")}
+            style={{ flexShrink: 0, padding: isMobile ? "11px 14px" : "8px 12px" }}
+            aria-label="Scan a Pay Later receipt to confirm payment">
+            🕒 Confirm Pay Later
+          </Btn>
         </div>
 
         {/* Category pills: scroll sideways on phones instead of wrapping into a tall block */}
@@ -1317,12 +1385,16 @@ export default function POSView({ categories, items, setItems, orders, setOrders
               boxSizing: "border-box",
             }}>
             <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>
-              {scanMode === "promo" ? "Scan promo QR" : "Scan rider QR"}
+              {scanMode === "promo" ? "Scan promo QR"
+                : scanMode === "rider" ? "Scan rider QR"
+                : "Confirm Pay Later"}
             </div>
             <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
               {scanMode === "promo"
                 ? "Point the camera at the customer's promo code."
-                : "Point the camera at the rider slip to mark that delivery complete."}
+                : scanMode === "rider"
+                ? "Point the camera at the rider slip to mark that delivery complete."
+                : "Point the camera at the customer's receipt QR to mark that order as paid."}
             </div>
             <div id={scanRegionId}
               style={{ width: "100%", minHeight: 260, borderRadius: 8, overflow: "hidden", background: "#000" }} />

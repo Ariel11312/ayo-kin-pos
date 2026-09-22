@@ -33,6 +33,14 @@ export function ReceiptModal({ order, onClose }) {
     `Address: ${order.delivery_address || "—"}`,
   ].join("\n");
 
+  // Pay Later orders carry their own QR — scanning it (via POSView's
+  // "Confirm Pay Later" scanner) flips the order from pending to completed
+  // once the customer actually settles up. Kept in a simple, distinct
+  // "PAYLATER-CONFIRM:<id>" format so it can never be mistaken for the
+  // rider-slip payload above, even if both were somehow printed together.
+  const isPayLater = order.payment_method === "pay_later";
+  const payLaterPayload = `PAYLATER-CONFIRM:${order.id}`;
+
   return (
     <Modal title="Receipt" onClose={onClose} width={380}>
       <style>{`
@@ -105,9 +113,30 @@ export function ReceiptModal({ order, onClose }) {
         </div>
 
         <div style={{ marginTop: 14, fontSize: 12, color: MUTED }}>
-          <div>Payment: <b style={{ textTransform: "uppercase" }}>{order.payment_method}</b></div>
+          <div>
+            Payment: <b style={{ textTransform: "uppercase" }}>
+              {order.payment_method === "pay_later" ? "Pay Later" : order.payment_method}
+            </b>
+          </div>
+          {isPayLater && (
+            <div style={{ color: DR, fontWeight: 700, marginTop: 2 }}>⚠ UNPAID — Pending payment</div>
+          )}
           {order.payment_ref && <div>Ref No: {order.payment_ref}</div>}
         </div>
+
+        {isPayLater && (
+          <div style={{ textAlign: "center", marginTop: 18 }}>
+            <div style={{
+              display: "inline-block", padding: 8, background: "#fff",
+              border: "1px solid #ddd", borderRadius: 6, lineHeight: 0,
+            }}>
+              <QRCodeCanvas value={payLaterPayload} size={140} level="M" marginSize={0} />
+            </div>
+            <div style={{ fontSize: 10, color: MUTED, marginTop: 6, fontFamily: FONT }}>
+              Scan at the counter to confirm payment received
+            </div>
+          </div>
+        )}
 
         {isPickupDelivery && (
           <div style={{ textAlign: "center", marginTop: 18 }}>
@@ -151,11 +180,20 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
   // even in demo mode.
   const onlineUnlocked = !!config?.paymongoKey;
 
+  const isPayLater = method === "pay_later";
+
   const handlePay = async () => {
     if (method === "cash" && !isPickupDelivery && cash < total) { setError("Cash given is less than total amount."); return; }
     if (method !== "cash" && !ref && demoMode) { /* allow demo without ref */ }
     setLoading(true); setError("");
     try {
+      // Pay Later: no PayMongo call, no cash to record — the order is
+      // simply saved as unpaid/pending until settled later.
+      if (isPayLater) {
+        await onPaid("pay_later", "");
+        return;
+      }
+
       let payRef = ref;
       if (!demoMode && config.paymongoKey && method !== "cash") {
         const pmMethods = { gcash: "gcash", card: "card" };
@@ -179,15 +217,16 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
   };
 
   const methods = [
-    { key: "cash",  emoji: "💵", label: "Cash",  locked: false },
-    { key: "gcash", emoji: "📱", label: "GCash", locked: !onlineUnlocked },
-    { key: "card",  emoji: "💳", label: "Card",  locked: !onlineUnlocked },
+    { key: "cash",      emoji: "💵", label: "Cash",      locked: false },
+    { key: "gcash",     emoji: "📱", label: "GCash",     locked: !onlineUnlocked },
+    { key: "card",      emoji: "💳", label: "Card",      locked: !onlineUnlocked },
+    { key: "pay_later", emoji: "🕒", label: "Pay Later", locked: false },
   ];
 
   return (
     <Modal title="Process Payment" onClose={onClose} width={420}>
       <div style={{ padding: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
           {methods.map(m => (
             <button
               key={m.key}
@@ -195,7 +234,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
               disabled={m.locked}
               title={m.locked ? "Add a PayMongo API key in settings to enable this payment method" : undefined}
               style={{
-                padding: "14px 8px", borderRadius: 8, fontFamily: FONT, fontWeight: 700, fontSize: 14, textAlign: "center",
+                padding: "12px 6px", borderRadius: 8, fontFamily: FONT, fontWeight: 700, fontSize: 12, textAlign: "center",
                 cursor: m.locked ? "not-allowed" : "pointer",
                 position: "relative",
                 border: method === m.key && !m.locked ? `2px solid ${DR}` : `1.5px solid ${BORDER}`,
@@ -206,7 +245,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
               {m.locked && (
                 <div style={{ position: "absolute", top: 6, right: 8, fontSize: 12 }}>🔒</div>
               )}
-              <div style={{ fontSize: 24, marginBottom: 4 }}>{m.emoji}</div>
+              <div style={{ fontSize: 22, marginBottom: 4 }}>{m.emoji}</div>
               {m.label}
             </button>
           ))}
@@ -222,6 +261,15 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
           <span style={{ fontSize: 13, color: MUTED }}>Amount Due</span>
           <span style={{ fontSize: 24, fontWeight: 700, color: DR }}>{fmt(total)}</span>
         </div>
+
+        {isPayLater && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, marginBottom: 18, padding: "12px 16px",
+            background: DR_LIGHT, borderRadius: 8, fontSize: 13, color: DR, fontWeight: 600,
+          }}>
+            🕒 This order will be saved as <b>pending</b> — no payment is recorded now. Settle it later from the order.
+          </div>
+        )}
 
         {method === "cash" && isPickupDelivery && (
           <div style={{
@@ -262,12 +310,12 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
         )}
 
         <ErrBox msg={error} />
-        {demoMode && <p style={{ fontSize: 11, color: MUTED, margin: "0 0 14px" }}>Demo mode — no real charges will be made.</p>}
+        {demoMode && !isPayLater && <p style={{ fontSize: 11, color: MUTED, margin: "0 0 14px" }}>Demo mode — no real charges will be made.</p>}
 
         <div style={{ display: "flex", gap: 10 }}>
           <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }} disabled={loading}>Cancel</Btn>
           <Btn onClick={handlePay} style={{ flex: 2 }} disabled={loading || (method === "cash" && !isPickupDelivery && cash < total && !!cashGiven)}>
-            {loading ? "Processing…" : `Confirm ${method === "cash" ? "Cash" : method.toUpperCase()} Payment`}
+            {loading ? "Processing…" : isPayLater ? "Confirm Pay Later" : `Confirm ${method === "cash" ? "Cash" : method.toUpperCase()} Payment`}
           </Btn>
         </div>
       </div>

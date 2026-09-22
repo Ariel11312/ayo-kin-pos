@@ -15,6 +15,15 @@ const parseRiderOrderId = (decodedText) => {
   return match ? match[1] : null;
 };
 
+// Pulls the order id back out of a receipt's "Pay Later" confirmation QR,
+// which ReceiptModal encodes as "PAYLATER-CONFIRM:<order id>". Kept in a
+// distinct, simple format so it's never confused with the rider payload
+// above, even if a receipt somehow carried both.
+const parsePayLaterOrderId = (decodedText) => {
+  const match = (decodedText || "").trim().match(/^PAYLATER-CONFIRM:(\S+)$/i);
+  return match ? match[1] : null;
+};
+
 const fmtTime = (iso) => {
   if (!iso) return "";
   try {
@@ -27,8 +36,11 @@ const fmtTime = (iso) => {
 };
 
 /* ─────────────────────────────────────────────
-   QR Scan Modal — opens the camera, reads a rider
-   slip's QR, hands the raw decoded text back.
+   QR Scan Modal — opens the camera, reads a QR,
+   hands the raw decoded text back. Generic over
+   what kind of QR it's expecting (rider slip or
+   pay-later confirmation) via `title`/`subtitle`;
+   the caller decides how to interpret the text.
 ───────────────────────────────────────────── */
 // Give every mounted scanner its own DOM id rather than one fixed id. If a
 // second Html5Qrcode instance is ever constructed before the first one's
@@ -61,7 +73,7 @@ const withTimeout = (promise, ms, message) =>
     );
   });
 
-function QrScanModal({ onDetected, onClose, isMobile }) {
+function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
   const regionIdRef = useRef(`rider-scanner-qr-region-${++qrScanInstanceCounter}`);
   const regionId = regionIdRef.current;
   const scannerRef = useRef(null);
@@ -205,9 +217,9 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
   return (
     <div style={overlay} onClick={onClose}>
       <div style={box} onClick={e => e.stopPropagation()}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>Scan rider QR</div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>{title}</div>
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
-          Point the camera at the delivery slip to mark it delivered.
+          {subtitle}
         </div>
         <div id={regionId} style={{ width: "100%", minHeight: 260, borderRadius: 8, overflow: "hidden", background: "#000" }} />
         {starting && !err && (
@@ -225,7 +237,7 @@ function QrScanModal({ onDetected, onClose, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
-   Order Detail / QR Modal
+   Order Detail / QR Modal — Rider (Pickup & Delivery)
    Lets staff re-open an order's rider QR (to
    reprint a lost slip) or confirm delivery by
    hand when scanning isn't practical.
@@ -334,14 +346,129 @@ function OrderDetailModal({ order, onClose, onMarkDelivered, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
+   Order Detail / QR Modal — Pay Later
+   Same idea as OrderDetailModal above, but for
+   an order awaiting payment rather than delivery:
+   re-open/reprint its confirm-payment QR, or mark
+   it paid by hand when scanning isn't practical.
+───────────────────────────────────────────── */
+function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
+  const canvasRef = useRef(null);
+
+  const payload = `PAYLATER-CONFIRM:${order.id}`;
+
+  const handlePrint = () => {
+    const dataUrl = canvasRef.current?.toDataURL("image/png");
+    if (!dataUrl) return;
+    const win = window.open("", "_blank", "width=420,height=600");
+    if (!win) return;
+    win.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Pay Later QR — ${order.id}</title>
+          <style>
+            body { font-family: -apple-system, Arial, sans-serif; text-align: center; padding: 28px 20px; }
+            h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: 0.4px; }
+            h2 { font-size: 12px; margin: 0 0 18px; color: #555; font-weight: 600; }
+            img { width: 240px; height: 240px; }
+            .details { margin-top: 18px; text-align: left; display: inline-block; font-size: 12px; line-height: 1.7; }
+            .details b { display: inline-block; min-width: 70px; }
+          </style>
+        </head>
+        <body>
+          <h1>${COMPANY_NAME}</h1>
+          <h2>Pay Later — Confirm Payment Slip</h2>
+          <img src="${dataUrl}" />
+          <div class="details">
+            <div><b>Order ID:</b> ${order.id}</div>
+            <div><b>Customer:</b> ${order.customer_name || "—"}</div>
+            <div><b>Total:</b> ${fmt(order.total)}</div>
+          </div>
+          <script>window.onload = () => window.print();</script>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  };
+
+  const overlay = {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    zIndex: 9999, fontFamily: FONT, padding: 16,
+  };
+
+  const box = {
+    background: BG, borderRadius: 12, padding: 22,
+    width: isMobile ? "100%" : 380, maxWidth: "100%",
+    boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
+    boxSizing: "border-box", textAlign: "center",
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={box} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 11, fontWeight: 800, color: DR, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 2 }}>
+          {COMPANY_NAME}
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>
+          Order {order.id}
+        </div>
+        <div style={{
+          display: "inline-block", background: DR_LIGHT, color: DR, fontWeight: 800,
+          fontSize: 11, padding: "3px 10px", borderRadius: 20, marginBottom: 12,
+        }}>
+          🕒 PAY LATER — UNPAID
+        </div>
+
+        <div style={{
+          display: "inline-block", borderRadius: 8, overflow: "hidden",
+          border: `1px solid ${BORDER}`, lineHeight: 0,
+        }}>
+          <QRCodeCanvas ref={canvasRef} value={payload} size={200} level="M" marginSize={2} />
+        </div>
+
+        <div style={{
+          marginTop: 14, textAlign: "left", fontSize: 12, color: TEXT,
+          background: SUBTLE, borderRadius: 8, padding: "10px 12px", lineHeight: 1.7,
+        }}>
+          <div><strong>Customer:</strong> {order.customer_name || "—"}</div>
+          <div><strong>Type:</strong> {order.type === "pickup_delivery" ? "Pickup & Delivery" : "Walk-in"}</div>
+          <div><strong>Total:</strong> {fmt(order.total)}</div>
+          <div><strong>Placed:</strong> {fmtTime(order.created_at)}</div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+          <Btn variant="ghost" onClick={handlePrint} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
+            🖨 Print
+          </Btn>
+          <Btn onClick={() => onMarkPaid(order.id)} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
+            ✓ Mark paid
+          </Btn>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <Btn variant="ghost" onClick={onClose} style={{ width: "100%", padding: isMobile ? "12px 0" : "9px 0" }}>
+            Close
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
    Rider Scanner — main view
    Sidebar page: scan a delivery slip's QR to
-   close out a Pickup & Delivery order, or pick
-   one from the pending list by hand.
+   close out a Pickup & Delivery order, scan a
+   Pay Later receipt's QR to confirm payment, or
+   pick one from the pending lists by hand.
 ───────────────────────────────────────────── */
 export default function RiderScannerView({ orders, setOrders }) {
-  const [scanning, setScanning] = useState(false);
-  const [selected, setSelected] = useState(null);
+  // Which scanner is open, if any: null | "rider" | "paylater".
+  const [scanMode, setScanMode] = useState(null);
+  const [selected, setSelected] = useState(null);       // pickup_delivery order shown in OrderDetailModal
+  const [selectedPayLater, setSelectedPayLater] = useState(null); // pay_later order shown in PayLaterDetailModal
   const [toast, setToast] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
@@ -354,6 +481,18 @@ export default function RiderScannerView({ orders, setOrders }) {
     () =>
       (orders || [])
         .filter(o => o.type === "pickup_delivery" && o.status === "pending")
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
+    [orders]
+  );
+
+  // Any order — walk-in or pickup & delivery — paid via "Pay Later" and
+  // still unpaid. Kept separate from `pending` above: a pickup_delivery
+  // order could in principle be both awaiting delivery AND awaiting
+  // payment, so the two lists aren't mutually exclusive.
+  const pendingPayLater = useMemo(
+    () =>
+      (orders || [])
+        .filter(o => o.payment_method === "pay_later" && o.status === "pending")
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
     [orders]
   );
@@ -403,8 +542,49 @@ export default function RiderScannerView({ orders, setOrders }) {
     showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
 
-  const handleScanned = (decodedText) => {
-    setScanning(false);
+  // Confirms a Pay Later order has now been paid: flips status to
+  // "completed". Same local-first, .select()-verified pattern as
+  // markDelivered above, so a blocked/failed write surfaces clearly
+  // instead of silently pretending to succeed.
+  const markPaid = async (orderId) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
+    if (order.payment_method !== "pay_later") {
+      showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return;
+    }
+    if (order.status === "completed") { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
+
+    setBusyId(orderId);
+
+    const { data, error } = await supabase
+      .from("orders")
+      .update({ status: "completed" })
+      .eq("id", orderId)
+      .select();
+
+    setBusyId(null);
+
+    if (error) {
+      showToast(`Could not update order: ${error.message}`, "err");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      showToast(
+        `Order ${orderId} was not updated — check update permissions/RLS on "orders".`,
+        "err"
+      );
+      return;
+    }
+
+    const updatedRow = data[0];
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updatedRow } : o));
+    setSelectedPayLater(null);
+    showToast(`Order ${orderId} marked as paid.`, "warn");
+  };
+
+  const handleRiderScanned = (decodedText) => {
+    setScanMode(null);
     const orderId = parseRiderOrderId(decodedText);
     if (!orderId) { showToast("QR code not recognized as a rider slip.", "err"); return; }
 
@@ -416,20 +596,39 @@ export default function RiderScannerView({ orders, setOrders }) {
     markDelivered(orderId);
   };
 
+  const handlePayLaterScanned = (decodedText) => {
+    setScanMode(null);
+    const orderId = parsePayLaterOrderId(decodedText);
+    if (!orderId) { showToast("QR code not recognized as a Pay Later confirmation.", "err"); return; }
+
+    const order = orders.find(o => o.id === orderId);
+    if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
+    if (order.payment_method !== "pay_later") { showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return; }
+    if (order.status === "completed") { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
+
+    markPaid(orderId);
+  };
+
   return (
     <div style={{ fontFamily: FONT, padding: 20, maxWidth: 760, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: TEXT }}>Rider Scanner</div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-            Scan a delivery slip to mark it delivered, or complete one manually below.
+            Scan a delivery slip to mark it delivered, scan a Pay Later receipt to confirm payment, or complete one manually below.
           </div>
         </div>
-        <Btn onClick={() => setScanning(true)} style={{ padding: "10px 18px", flexShrink: 0 }}>
-          📷 Scan rider QR
-        </Btn>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <Btn onClick={() => setScanMode("rider")} style={{ padding: "10px 18px" }}>
+            📷 Scan rider QR
+          </Btn>
+          <Btn variant="ghost" onClick={() => setScanMode("paylater")} style={{ padding: "10px 18px" }}>
+            🕒 Scan Pay Later
+          </Btn>
+        </div>
       </div>
 
+      {/* ── Pending deliveries ── */}
       <div style={{
         marginTop: 22, display: "flex", alignItems: "center", justifyContent: "space-between",
         borderBottom: `1px solid ${BORDER}`, paddingBottom: 8,
@@ -478,14 +677,89 @@ export default function RiderScannerView({ orders, setOrders }) {
         </div>
       )}
 
-      {scanning && (
-        <QrScanModal onDetected={handleScanned} onClose={() => setScanning(false)} isMobile={false} />
+      {/* ── Pending Pay Later ── */}
+      <div style={{
+        marginTop: 28, display: "flex", alignItems: "center", justifyContent: "space-between",
+        borderBottom: `1px solid ${BORDER}`, paddingBottom: 8,
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>
+          Pending Pay Later {pendingPayLater.length > 0 && <span style={{ color: MUTED, fontWeight: 600 }}>· {pendingPayLater.length}</span>}
+        </div>
+      </div>
+
+      {pendingPayLater.length === 0 ? (
+        <div style={{ textAlign: "center", color: MUTED, padding: "56px 0" }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🕒</div>
+          <div style={{ fontSize: 14 }}>No unpaid Pay Later orders</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Orders paid via "Pay Later" will show up here until confirmed.</div>
+        </div>
+      ) : (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {pendingPayLater.map(o => (
+            <div key={o.id} style={{
+              display: "flex", alignItems: "center", gap: 12,
+              border: `1px solid ${BORDER}`, borderRadius: 10, padding: "12px 14px",
+              background: BG,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>
+                  {o.id} <span style={{ color: MUTED, fontWeight: 600 }}>· {fmt(o.total)}</span>
+                  <span style={{
+                    marginLeft: 8, fontSize: 10, fontWeight: 800, color: DR, background: DR_LIGHT,
+                    borderRadius: 20, padding: "1px 8px", verticalAlign: "middle",
+                  }}>
+                    UNPAID
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: TEXT, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {o.customer_name || "—"} <span style={{ color: MUTED }}>· {o.type === "pickup_delivery" ? "Pickup & Delivery" : "Walk-in"}</span>
+                </div>
+                <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>Placed {fmtTime(o.created_at)}</div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <Btn variant="ghost" onClick={() => setSelectedPayLater(o)} style={{ padding: "8px 12px" }}>
+                  QR
+                </Btn>
+                <Btn onClick={() => markPaid(o.id)} disabled={busyId === o.id} style={{ padding: "8px 12px" }}>
+                  {busyId === o.id ? "…" : "✓ Paid"}
+                </Btn>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {scanMode === "rider" && (
+        <QrScanModal
+          onDetected={handleRiderScanned}
+          onClose={() => setScanMode(null)}
+          isMobile={false}
+          title="Scan rider QR"
+          subtitle="Point the camera at the delivery slip to mark it delivered."
+        />
+      )}
+      {scanMode === "paylater" && (
+        <QrScanModal
+          onDetected={handlePayLaterScanned}
+          onClose={() => setScanMode(null)}
+          isMobile={false}
+          title="Scan Pay Later QR"
+          subtitle="Point the camera at the customer's receipt to confirm payment."
+        />
       )}
       {selected && (
         <OrderDetailModal
           order={selected}
           onClose={() => setSelected(null)}
           onMarkDelivered={markDelivered}
+          isMobile={false}
+        />
+      )}
+      {selectedPayLater && (
+        <PayLaterDetailModal
+          order={selectedPayLater}
+          onClose={() => setSelectedPayLater(null)}
+          onMarkPaid={markPaid}
           isMobile={false}
         />
       )}
