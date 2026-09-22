@@ -204,6 +204,78 @@ export default function OrdersView({ orders, setOrders }) {
     { label: "Refunded",   value: periodOrders.filter(o => o.status === "refunded").length,    color: "#92400E" },
   ];
 
+  // ── Print the currently visible orders as a receipt-style report ──
+  // Prints exactly what's on screen — respects the active period filter
+  // (Today/This Week/etc.), status filter, and search box — plus a totals
+  // summary for the whole period at the bottom.
+  function printOrders() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+    const timeStr = now.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
+
+    const rowsHtml = visible.map(o => {
+      const time = new Date(o.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
+      const disc = o.discount_type ? DISCOUNT_META[o.discount_type].label : "—";
+      return `
+        <tr>
+          <td>${o.id}</td>
+          <td style="text-align:center">${time}</td>
+          <td style="text-align:center">${o.items.length}</td>
+          <td style="text-align:right">${fmt(o.total)}</td>
+          <td style="text-align:center">${disc}</td>
+          <td style="text-align:right">${o.status.toUpperCase()}</td>
+        </tr>`;
+    }).join("");
+
+    const completedCount = periodOrders.filter(o => o.status === "completed").length;
+    const voidedCount    = periodOrders.filter(o => o.status === "voided").length;
+    const refundedCount  = periodOrders.filter(o => o.status === "refunded").length;
+
+    const html = `
+      <html>
+        <head>
+          <title>Sales Report - ${dateStr}</title>
+          <style>
+            body { font-family: 'Courier New', monospace; width: 320px; margin: 0 auto; padding: 10px; font-size: 12px; }
+            h2 { text-align: center; margin: 4px 0; font-size: 14px; }
+            .sub { text-align: center; font-size: 11px; margin-bottom: 4px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            th, td { padding: 3px 2px; font-size: 10px; }
+            th { border-bottom: 1px dashed #000; text-align: left; }
+            .line { border-top: 1px dashed #000; margin: 8px 0; }
+            .totals { margin-top: 8px; font-size: 12px; line-height: 1.6; }
+            .totals strong { font-size: 13px; }
+          </style>
+        </head>
+        <body>
+          <h2>SALES REPORT</h2>
+          <div class="sub">${headerLabel} sales · ${dateStr} ${timeStr}</div>
+          ${filter !== "all" ? `<div class="sub">Status filter: ${filter}</div>` : ""}
+          ${search ? `<div class="sub">Search: "${search}"</div>` : ""}
+          <div class="line"></div>
+          <table>
+            <thead>
+              <tr><th>Order</th><th style="text-align:center">Time</th><th style="text-align:center">Qty</th><th style="text-align:right">Total</th><th style="text-align:center">Disc</th><th style="text-align:right">Status</th></tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <div class="line"></div>
+          <div class="totals">
+            Orders shown: ${visible.length}<br/>
+            Period total: ${periodOrders.length} · Completed: ${completedCount} · Voided: ${voidedCount} · Refunded: ${refundedCount}<br/>
+            <strong>${headerLabel} sales: ${fmt(periodSales)}</strong>
+          </div>
+        </body>
+      </html>`;
+
+    const win = window.open("", "_blank", "width=380,height=600");
+    if (!win) return; // popup blocked by browser
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
+  }
+
   // ── Remove discount (restore original total) ──────────
   const removeDiscount = async (order) => {
     const restored = order.subtotal ?? order.total;
@@ -341,7 +413,7 @@ export default function OrdersView({ orders, setOrders }) {
     }}>
 
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: isMobile ? 14 : 18, flexShrink: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: isMobile ? "center" : "flex-start", marginBottom: isMobile ? 14 : 18, flexShrink: 0, gap: 10 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Orders</h2>
           <p style={{ margin: "4px 0 0", color: MUTED, fontSize: 13 }}>
@@ -350,6 +422,18 @@ export default function OrdersView({ orders, setOrders }) {
             from {periodOrders.filter(o => o.status === "completed").length} orders
           </p>
         </div>
+        <button
+          onClick={printOrders}
+          style={{
+            padding: isMobile ? "9px 14px" : "7px 14px",
+            borderRadius: 6, border: `1px solid ${BORDER}`, cursor: "pointer",
+            fontFamily: FONT, fontSize: 12, fontWeight: 700, color: MUTED, background: BG,
+            whiteSpace: "nowrap", touchAction: "manipulation", flexShrink: 0,
+            display: "flex", alignItems: "center", gap: 5,
+          }}
+        >
+          🖨️ Print
+        </button>
       </div>
 
       {/* Summary cards — 2×2 on phones */}

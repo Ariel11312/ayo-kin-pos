@@ -356,6 +356,68 @@ export default function StockView({ demoMode }) {
     setModal(null);
   }
 
+  // ── print inventory as a grocery-style receipt ──
+  // Lives inside the component so it can see `rows`, `items`,
+  // `outCount`, `lowCount`, `invValue`, etc.
+  function printInventory() {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+    const timeStr = now.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
+
+    const rowsHtml = rows.map(i => {
+      const qty = isTracked(i) ? (i.stock ?? 0) : "—";
+      const status = !isTracked(i) ? "SERVICE" : getStatus(i)?.toUpperCase();
+      return `
+        <tr>
+          <td>${i.name}</td>
+          <td style="text-align:center">${qty}</td>
+          <td style="text-align:right">${fmt(i.price ?? 0)}</td>
+          <td style="text-align:right">${status}</td>
+        </tr>`;
+    }).join("");
+
+    const html = `
+      <html>
+        <head>
+          <title>Inventory - ${dateStr}</title>
+          <style>
+            body { font-family: 'Courier New', monospace; width: 280px; margin: 0 auto; padding: 10px; font-size: 12px; }
+            h2 { text-align: center; margin: 4px 0; font-size: 14px; }
+            .sub { text-align: center; font-size: 11px; margin-bottom: 10px; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { padding: 3px 2px; font-size: 11px; }
+            th { border-bottom: 1px dashed #000; text-align: left; }
+            .line { border-top: 1px dashed #000; margin: 8px 0; }
+            .totals { margin-top: 8px; font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <h2>INVENTORY REPORT</h2>
+          <div class="sub">${dateStr} · ${timeStr}</div>
+          <div class="line"></div>
+          <table>
+            <thead>
+              <tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Status</th></tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <div class="line"></div>
+          <div class="totals">
+            Total SKUs: ${items.length}<br/>
+            Out of stock: ${outCount}<br/>
+            Low stock: ${lowCount}<br/>
+            Inventory value: ${fmt(invValue)}
+          </div>
+        </body>
+      </html>`;
+
+    const win = window.open("", "_blank", "width=380,height=600");
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 300);
+  }
+
   /* ── filtered + sorted rows ── */
   const rows = useMemo(() => {
     let list = [...items];
@@ -456,6 +518,7 @@ export default function StockView({ demoMode }) {
         {!isMobile && <div style={{ flex: 1 }} />}
         <div style={{ display: "flex", gap: 8, flex: isMobile ? "1 1 100%" : "0 0 auto" }}>
           <button onClick={() => setModal("log")} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined }}>📋 Activity log</button>
+          <button onClick={printInventory} style={{ ...ghostBtn, flex: isMobile ? 1 : undefined }}>🖨️ Print</button>
           <button onClick={openRestock} style={{ ...primaryBtn, flex: isMobile ? 1 : undefined }}>+ Restock</button>
         </div>
       </div>
