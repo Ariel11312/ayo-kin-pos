@@ -22,6 +22,66 @@ import CalendarView from "./Views/CalendarView";
 import ExpensesView from "./Views/ExpensesView";
 import PromoView from "./Views/PromoView";
 import RiderScannerView from "./Views/RiderScanView";
+
+const LOGO_RED = "#C81E1E";
+
+// Chrome/glass wordmark text — same metallic treatment used on the login screen,
+// sized down here to fit the sidebar.
+function ChromeText({ children, fontSize, letterSpacing = "0.5px" }) {
+  return (
+    <span
+      style={{
+        fontFamily: FONT,
+        fontWeight: 800,
+        fontSize,
+        letterSpacing,
+        lineHeight: 1,
+        backgroundImage:
+          "linear-gradient(180deg, #ffffff 0%, #cfe7ee 28%, #7fa9b4 48%, #ffffff 62%, #9fc2cc 80%, #ffffff 100%)",
+        WebkitBackgroundClip: "text",
+        backgroundClip: "text",
+        color: "transparent",
+        textShadow:
+          "0 1px 0 rgba(255,255,255,0.6), 0 -1px 1px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.45)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+// Small red power-button glyph standing in for the hyphen in "BULA-ON".
+function PowerBadge({ size }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        margin: "0 3px",
+        flexShrink: 0,
+        background: "radial-gradient(circle at 35% 30%, #3a3a3a, #0c0c0c 70%)",
+        boxShadow: `0 0 0 1.5px rgba(255,255,255,0.15), 0 0 ${size * 0.6}px ${LOGO_RED}99, inset 0 1px 2px rgba(255,255,255,0.15)`,
+      }}
+    >
+      <svg width={size * 0.55} height={size * 0.55} viewBox="0 0 24 24" fill="none">
+        <path d="M12 3v8" stroke={LOGO_RED} strokeWidth="2.4" strokeLinecap="round" />
+        <path
+          d="M7 6.5a8 8 0 1 0 10 0"
+          stroke={LOGO_RED}
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          fill="none"
+        />
+      </svg>
+    </span>
+  );
+}
+
 export default function App() {
   const navigate = useNavigate();
   const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
@@ -201,7 +261,14 @@ const todaySales = orders
         <div className={`sidebar ${mobileNavOpen ? "open" : ""}`}>
           <div style={{ padding: "20px 18px 16px", borderBottom: "1px solid rgba(255,255,255,0.12)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
-              <div style={{ fontSize: 10, letterSpacing: 3, textTransform: "uppercase", opacity: 0.65, marginBottom: 3, fontWeight: 700 }}>Bula-On Laundry Hub</div>
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <ChromeText fontSize={16}>BULA</ChromeText>
+                <PowerBadge size={16} />
+                <ChromeText fontSize={16}>ON</ChromeText>
+              </div>
+              <div style={{ fontSize: 9, letterSpacing: 2.5, textTransform: "uppercase", opacity: 0.7, marginTop: 3, marginBottom: 10, fontWeight: 700, color: "#fff" }}>
+                Laundry Hub
+              </div>
               <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5 }}>SalesPoint</div>
               {demoMode && (
                 <div style={{ marginTop: 8, display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.18)", padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>

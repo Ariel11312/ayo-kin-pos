@@ -25,11 +25,15 @@ const REORDER_REASONS = [
   "Opening stock",
 ];
 
-/* ─── desktop table layout ───
-   ONE list drives both the <colgroup> and the header row, so the header,
-   the column widths and the body cells can never drift apart again.
-   The body row in the render below follows this exact order:
-   Item · Category · Price · Qty · Status · Unit · Reorder at · Available · Actions */
+/* ─── data source ───
+   Reads come from the `menu_items_stock` view (service_count is computed
+   live from orders). Writes go to the real `menu_items` table. */
+const READ_SOURCE = "menu_items_stock";
+const WRITE_TABLE = "menu_items";
+const READ_COLS =
+  "id, name, category_id, price, available, stock, reorder, unit, service_count, service_count_adjust";
+
+/* ─── desktop table layout ─── */
 const TABLE_COLS = [
   { key: "name",        label: "Item",       width: "20%", align: "left"  },
   { key: "category_id", label: "Category",   width: "10%", align: "left"  },
@@ -49,19 +53,23 @@ const thBase = {
 };
 
 /* ─── helpers ─── */
-// Items sold "per load" (wash/dry/fold, delivery tiers, etc.) are services,
-// not physical inventory — they never go "out of stock" no matter what's
-// sitting in the `stock` column.
 function isTracked(item) {
   return !!item && item.unit !== "service";
 }
+// Live count of times a service was ordered (from the menu_items_stock view).
+function serviceCountOf(item) {
+  return Number(item?.service_count ?? 0);
+}
 function getStatus(item) {
-  if (!isTracked(item)) return null; // service item — stock not applicable
+  if (!isTracked(item)) return null;
   const stock   = item.stock   ?? 0;
   const reorder = item.reorder ?? 3;
   if (stock === 0)      return "out";
   if (stock <= reorder) return "low";
   return "ok";
+}
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function StatusBadge({ item }) {
@@ -87,7 +95,7 @@ function StatusBadge({ item }) {
 }
 
 function StockBar({ item }) {
-  if (!isTracked(item)) return null; // services have no meaningful stock level
+  if (!isTracked(item)) return null;
   const max   = Math.max(item.stock ?? 0, (item.reorder ?? 3) * 4, 10);
   const pct   = Math.min(100, Math.round(((item.stock ?? 0) / max) * 100));
   const s     = getStatus(item);
@@ -180,6 +188,7 @@ export default function StockView({ demoMode }) {
   const [edStock,   setEdStock]   = useState(0);
   const [edReorder, setEdReorder] = useState(3);
   const [edPrice,   setEdPrice]   = useState(0);
+  const [edCount,   setEdCount]   = useState(0); // displayed service count (service items only)
 
   const channelRef = useRef(null);
 
@@ -231,8 +240,8 @@ export default function StockView({ demoMode }) {
     setError(null);
     try {
       const { data, error: err } = await supabase
-        .from("menu_items")
-        .select("id, name, category_id, price, available, stock, reorder, unit")
+        .from(READ_SOURCE)
+        .select(READ_COLS)
         .order("name");
       if (err) throw err;
       setItems(data || []);
@@ -243,27 +252,50 @@ export default function StockView({ demoMode }) {
     }
   }
 
+  // Re-read only the computed counts (cheap) without the loading spinner.
+  async function refreshCounts() {
+    try {
+      const { data, error: err } = await supabase
+        .from(READ_SOURCE)
+        .select("id, service_count, service_count_adjust");
+      if (err || !data) return;
+      const map = new Map(data.map(r => [r.id, r]));
+      setItems(prev => prev.map(i => map.has(i.id) ? { ...i, ...map.get(i.id) } : i));
+    } catch { /* ignore, next event will retry */ }
+  }
+
   function setupRealtime() {
     const channel = supabase
       .channel("stock-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "menu_items" }, (payload) => {
+      // menu_items rows don't carry the computed service_count, so keep the existing one.
+      .on("postgres_changes", { event: "*", schema: "public", table: WRITE_TABLE }, (payload) => {
         const { eventType, new: newRow, old: oldRow } = payload;
         setItems(prev => {
-          if (eventType === "INSERT") return [...prev, newRow].sort((a, b) => a.name.localeCompare(b.name));
+          if (eventType === "INSERT") {
+            return [...prev, { ...newRow, service_count: 0 }].sort((a, b) => a.name.localeCompare(b.name));
+          }
           if (eventType === "DELETE") return prev.filter(i => i.id !== oldRow.id);
-          if (eventType === "UPDATE") return prev.map(i => i.id === newRow.id ? newRow : i);
+          if (eventType === "UPDATE") {
+            return prev.map(i => i.id === newRow.id
+              ? { ...i, ...newRow, service_count: i.service_count }
+              : i);
+          }
           return prev;
         });
+        // adjust column may have changed → recompute counts
+        if (eventType === "UPDATE" || eventType === "INSERT") refreshCounts();
       })
+      // orders hold the line items (jsonb): new order, edit, void → recount services
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => refreshCounts())
       .subscribe();
     channelRef.current = channel;
   }
 
-  async function updateItemDB(id, patch) {
-    // Optimistic: update UI immediately
-    setItems(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i));
+  // `patch` is sent to the DB. `local` is UI-only (computed fields such as service_count).
+  async function updateItemDB(id, patch, local = {}) {
+    setItems(prev => prev.map(i => i.id === id ? { ...i, ...patch, ...local } : i));
     try {
-      const { error: err } = await supabase.from("menu_items").update(patch).eq("id", id);
+      const { error: err } = await supabase.from(WRITE_TABLE).update(patch).eq("id", id);
       if (err) throw err;
     } catch (e) {
       await fetchItems(); // rollback
@@ -286,7 +318,6 @@ export default function StockView({ demoMode }) {
     else { setSortKey(key); setSortDir("asc"); }
   }
 
-  // Header label. Sortable columns (key != null) are clickable.
   function colHeader(key, label) {
     if (!key) return <span style={{ fontWeight: 600, color: MUTED }}>{label}</span>;
     const active = sortKey === key;
@@ -325,12 +356,14 @@ export default function StockView({ demoMode }) {
     setEdStock(item.stock ?? 0);
     setEdReorder(item.reorder ?? 3);
     setEdPrice(item.price ?? 0);
+    setEdCount(serviceCountOf(item));
     setModal("edit");
   }
 
   async function doRestock() {
     const item = items.find(i => i.id === rsItem);
     if (!item || Number(rsQty) <= 0) return;
+    if (!isTracked(item)) { showToast("Service items aren't stock-tracked", "err"); return; }
     setSaving(true);
     const newStock = (item.stock ?? 0) + Number(rsQty);
     await updateItemDB(item.id, { stock: newStock, available: true });
@@ -346,10 +379,28 @@ export default function StockView({ demoMode }) {
     const prev  = editItem.stock ?? 0;
     const next  = Number(edStock);
     const patch = { stock: next, reorder: Number(edReorder), price: Number(edPrice) };
-    await updateItemDB(editItem.id, patch);
+    const local = {};
+
+    // Service items: the count comes from orders. A correction is stored as an
+    // offset (service_count_adjust) so it survives new orders coming in.
+    const service   = !isTracked(editItem);
+    const prevCount = serviceCountOf(editItem);
+    const nextCount = Math.max(0, Math.floor(Number(edCount) || 0));
+    if (service) {
+      const ordered = prevCount - (editItem.service_count_adjust ?? 0);
+      const newAdjust = nextCount - ordered;
+      patch.service_count_adjust = newAdjust;
+      local.service_count = nextCount;
+    }
+
+    await updateItemDB(editItem.id, patch, local);
     if (next !== prev) {
       const delta = next - prev;
       pushLog({ item: editItem.name, change: delta >= 0 ? `+${delta}` : `${delta}`, result: next, reason: "Manual edit" });
+    }
+    if (service && nextCount !== prevCount) {
+      const delta = nextCount - prevCount;
+      pushLog({ item: editItem.name, change: delta >= 0 ? `+${delta}` : `${delta}`, result: nextCount, reason: "Service count edit" });
     }
     showToast(`${editItem.name} updated`);
     setSaving(false);
@@ -357,19 +408,18 @@ export default function StockView({ demoMode }) {
   }
 
   // ── print inventory as a grocery-style receipt ──
-  // Lives inside the component so it can see `rows`, `items`,
-  // `outCount`, `lowCount`, `invValue`, etc.
   function printInventory() {
     const now = new Date();
     const dateStr = now.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
     const timeStr = now.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
 
     const rowsHtml = rows.map(i => {
-      const qty = isTracked(i) ? (i.stock ?? 0) : "—";
-      const status = !isTracked(i) ? "SERVICE" : getStatus(i)?.toUpperCase();
+      const tracked = isTracked(i);
+      const qty = tracked ? (i.stock ?? 0) : `${serviceCountOf(i)} done`;
+      const status = !tracked ? "SERVICE" : getStatus(i)?.toUpperCase();
       return `
         <tr>
-          <td>${i.name}</td>
+          <td>${escapeHtml(i.name)}</td>
           <td style="text-align:center">${qty}</td>
           <td style="text-align:right">${fmt(i.price ?? 0)}</td>
           <td style="text-align:right">${status}</td>
@@ -406,12 +456,14 @@ export default function StockView({ demoMode }) {
             Total SKUs: ${items.length}<br/>
             Out of stock: ${outCount}<br/>
             Low stock: ${lowCount}<br/>
+            Services performed: ${totalServiceCount}<br/>
             Inventory value: ${fmt(invValue)}
           </div>
         </body>
       </html>`;
 
     const win = window.open("", "_blank", "width=380,height=600");
+    if (!win) { showToast("Allow pop-ups to print", "err"); return; }
     win.document.write(html);
     win.document.close();
     win.focus();
@@ -436,12 +488,11 @@ export default function StockView({ demoMode }) {
     return list;
   }, [items, search, filter, sortKey, sortDir]);
 
-  // Only physically stock-tracked items (unit !== "service") count toward
-  // out-of-stock / low-stock / inventory-value totals. Service items are
-  // still counted in Total SKUs.
   const totalItems = items.length;
   const trackedItems = items.filter(isTracked);
-  const serviceCount = totalItems - trackedItems.length;
+  const serviceItems = items.filter(i => !isTracked(i));
+  const serviceCount = serviceItems.length;
+  const totalServiceCount = serviceItems.reduce((s, i) => s + serviceCountOf(i), 0);
   const outCount   = trackedItems.filter(i => (i.stock ?? 0) === 0).length;
   const lowCount   = trackedItems.filter(i => (i.stock ?? 0) > 0 && (i.stock ?? 0) <= (i.reorder ?? 3)).length;
   const invValue   = trackedItems.reduce((s, i) => s + (i.stock ?? 0) * (i.price ?? 0), 0);
@@ -479,7 +530,8 @@ export default function StockView({ demoMode }) {
         <StatCard isMobile={isMobile} label="Out of stock"    value={outCount}      sub="need restocking"    valueColor={outCount > 0 ? DANGER  : TEXT} />
         <StatCard isMobile={isMobile} label="Low stock"       value={lowCount}      sub="at / below reorder" valueColor={lowCount > 0 ? WARNING : TEXT} />
         <StatCard isMobile={isMobile} label="Inventory value" value={fmt(invValue)} sub="at sell price" />
-        <StatCard isMobile={isMobile} label="Services"        value={serviceCount}  sub="per-load, not stock-tracked" valueColor={NEUTRAL} />
+        <StatCard isMobile={isMobile} label="Services performed" value={totalServiceCount}
+          sub={`across ${serviceCount} service item${serviceCount === 1 ? "" : "s"}`} valueColor={INFO} />
       </div>
 
       {/* toolbar */}
@@ -563,8 +615,9 @@ export default function StockView({ demoMode }) {
                       <StockBar item={item} />
                     </>
                   ) : (
-                    <div style={{ display: "flex", alignItems: "center", marginTop: 12 }}>
-                      <span style={{ fontSize: 12, color: MUTED }}>Service item · stock not tracked</span>
+                    <div style={{ display: "flex", alignItems: "center", marginTop: 12, gap: 8 }}>
+                      <span style={{ fontSize: 18, fontWeight: 800, color: INFO }}>{serviceCountOf(item)}</span>
+                      <span style={{ fontSize: 12, color: MUTED }}>ordered · service, stock not tracked</span>
                       <div style={{ flex: 1 }} />
                       <button onClick={() => openEdit(item)} style={ghostBtn}>Edit</button>
                     </div>
@@ -631,7 +684,7 @@ export default function StockView({ demoMode }) {
                     {/* 3 · Price */}
                     <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: TEXT }}>{fmt(item.price ?? 0)}</td>
 
-                    {/* 4 · Qty */}
+                    {/* 4 · Qty (services show how many times they've been ordered) */}
                     <td style={tdStyle}>
                       {tracked ? (
                         <>
@@ -643,7 +696,10 @@ export default function StockView({ demoMode }) {
                           <StockBar item={item} />
                         </>
                       ) : (
-                        <span style={{ fontSize: 12, color: MUTED }}>—</span>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+                          <span style={{ fontWeight: 800, fontSize: 14, color: INFO }}>{serviceCountOf(item)}</span>
+                          <span style={{ fontSize: 11, color: MUTED }}>ordered</span>
+                        </div>
                       )}
                     </td>
 
@@ -752,6 +808,12 @@ export default function StockView({ demoMode }) {
             <label style={labelStyle}>Stock (units){!isTracked(editItem) ? " — not tracked for this item" : ""}</label>
             <input type="number" min={0} inputMode="numeric" value={edStock} onChange={e => setEdStock(e.target.value)} style={inputStyle} />
           </div>
+          {!isTracked(editItem) && (
+            <div style={rowStyle}>
+              <label style={labelStyle}>Times ordered — counted live from orders; edit to apply a correction</label>
+              <input type="number" min={0} inputMode="numeric" value={edCount} onChange={e => setEdCount(e.target.value)} style={inputStyle} />
+            </div>
+          )}
           <div style={rowStyle}>
             <label style={labelStyle}>Reorder point — alert when stock ≤ this</label>
             <input type="number" min={0} inputMode="numeric" value={edReorder} onChange={e => setEdReorder(e.target.value)} style={inputStyle} />
@@ -763,6 +825,11 @@ export default function StockView({ demoMode }) {
           {isTracked(editItem) && Number(edStock) !== (editItem.stock ?? 0) && (
             <div style={{ background: WARNING_BG, borderRadius: 8, padding: "9px 13px", marginBottom: 14, fontSize: 12, color: WARNING }}>
               Stock will change from <strong>{editItem.stock ?? 0}</strong> → <strong>{edStock}</strong> units. This will be logged.
+            </div>
+          )}
+          {!isTracked(editItem) && Number(edCount) !== serviceCountOf(editItem) && (
+            <div style={{ background: WARNING_BG, borderRadius: 8, padding: "9px 13px", marginBottom: 14, fontSize: 12, color: WARNING }}>
+              Times ordered will change from <strong>{serviceCountOf(editItem)}</strong> → <strong>{edCount}</strong>. This will be logged.
             </div>
           )}
           <div style={{ display: "flex", gap: 8, justifyContent: isMobile ? "stretch" : "flex-end" }}>

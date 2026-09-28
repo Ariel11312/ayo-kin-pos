@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { BG, BORDER, DR, DR_LIGHT, FONT, inputStyle, MUTED, SUBTLE, TEXT } from "../../ui/styles";
 import fmt from "../../function/fmt";
@@ -114,33 +114,40 @@ const CUSTOMER_SEARCH_DEBOUNCE_MS = 350;
 const CUSTOMER_SEARCH_MAX_RESULTS = 6;
 
 /* ─────────────────────────────────────────────
-   Responsive helper
-   Single source of truth for the phone/tablet
-   breakpoint. Listens to matchMedia so rotating
-   the device re-renders immediately.
+   Responsive helpers
+   - useIsMobile: phone/tablet WIDTH breakpoint
+   - useIsShort:  viewport HEIGHT under 500px
+                  (landscape phones, small windows).
+                  Cart becomes a centred modal and the
+                  sidebar hides behind a burger button.
+   Both listen to matchMedia so rotating the device
+   or resizing the window re-renders immediately.
 ───────────────────────────────────────────── */
 const MOBILE_BP = 820;
+const SHORT_BP  = 500; // height below this => modal cart + burger menu
 
-const useIsMobile = (bp = MOBILE_BP) => {
-  const [isMobile, setIsMobile] = useState(
-    () => typeof window !== "undefined" && window.innerWidth <= bp
-  );
+const useMediaQuery = (query) => {
+  const get = () => typeof window !== "undefined" && window.matchMedia(query).matches;
+  const [matches, setMatches] = useState(get);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const mq = window.matchMedia(`(max-width: ${bp}px)`);
-    const onChange = (e) => setIsMobile(e.matches);
-    setIsMobile(mq.matches);
+    const mq = window.matchMedia(query);
+    const onChange = (e) => setMatches(e.matches);
+    setMatches(mq.matches);
     if (mq.addEventListener) mq.addEventListener("change", onChange);
     else mq.addListener(onChange);
     return () => {
       if (mq.removeEventListener) mq.removeEventListener("change", onChange);
       else mq.removeListener(onChange);
     };
-  }, [bp]);
+  }, [query]);
 
-  return isMobile;
+  return matches;
 };
+
+const useIsMobile = (bp = MOBILE_BP) => useMediaQuery(`(max-width: ${bp}px)`);
+const useIsShort  = (h = SHORT_BP)  => useMediaQuery(`(max-height: ${h - 1}px)`); // < 500px
 
 // iOS zooms the page when a focused input's font-size is under 16px.
 const noZoomFont = (isMobile) => (isMobile ? 16 : 13);
@@ -148,14 +155,18 @@ const SAFE_BOTTOM = "env(safe-area-inset-bottom, 0px)";
 
 /* ─────────────────────────────────────────────
    Discount Info Modal (PWD / Senior Citizen)
-   Desktop: centred dialog. Mobile: bottom sheet
-   that stays clear of the keyboard.
+   Desktop / short screens: centred dialog.
+   Portrait mobile: bottom sheet that stays clear
+   of the keyboard.
 ───────────────────────────────────────────── */
-function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
+function DiscountInfoModal({ type, onConfirm, onClose, isMobile, isShort }) {
   const [idNo,    setIdNo]    = useState("");
   const [name,    setName]    = useState("");
   const [address, setAddress] = useState("");
   const [err,     setErr]     = useState("");
+
+  // Bottom sheet only makes sense on tall phone screens.
+  const asSheet = isMobile && !isShort;
 
   const label = type === "pwd" ? "PWD" : "Senior Citizen";
 
@@ -170,23 +181,24 @@ function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
   const overlay = {
     position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
     display: "flex",
-    alignItems: isMobile ? "flex-end" : "center",
+    alignItems: asSheet ? "flex-end" : "center",
     justifyContent: "center",
     zIndex: 9999, fontFamily: FONT,
-    padding: isMobile ? 0 : 16,
+    padding: asSheet ? 0 : isShort ? 8 : 16,
+    boxSizing: "border-box",
     overscrollBehavior: "contain",
   };
 
   const box = {
     background: BG,
-    borderRadius: isMobile ? "16px 16px 0 0" : 12,
-    padding: isMobile ? "22px 18px" : 28,
-    width: isMobile ? "100%" : 380,
+    borderRadius: asSheet ? "16px 16px 0 0" : 12,
+    padding: asSheet ? "22px 18px" : isShort ? "16px 18px" : 28,
+    width: asSheet ? "100%" : 380,
     maxWidth: "100%",
-    maxHeight: isMobile ? "92vh" : "90vh",
+    maxHeight: isShort ? "100%" : asSheet ? "92vh" : "90vh",
     overflowY: "auto",
     WebkitOverflowScrolling: "touch",
-    paddingBottom: isMobile ? `calc(22px + ${SAFE_BOTTOM})` : 28,
+    paddingBottom: asSheet ? `calc(22px + ${SAFE_BOTTOM})` : isShort ? 16 : 28,
     boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
     border: `1px solid ${BORDER}`,
     boxSizing: "border-box",
@@ -212,8 +224,8 @@ function DiscountInfoModal({ type, onConfirm, onClose, isMobile }) {
     <div style={overlay} onClick={onClose}>
       <div style={box} onClick={e => e.stopPropagation()}>
 
-        {/* Grab handle — mobile only */}
-        {isMobile && (
+        {/* Grab handle — bottom-sheet mode only */}
+        {asSheet && (
           <div style={{ width: 38, height: 4, borderRadius: 2, background: BORDER, margin: "0 auto 14px" }} />
         )}
 
@@ -328,9 +340,45 @@ const safeTeardown = (html5Qr) =>
 
 /* ─────────────────────────────────────────────
    Main POS View
+
+   Props:
+   - onToggleMenu: called by the burger button (shown only when the
+     viewport is under 500px tall). The PARENT owns the sidebar drawer;
+     see the note at the bottom of this file.
 ───────────────────────────────────────────── */
-export default function POSView({ categories, items, setItems, orders, setOrders, config, demoMode }) {
-  const isMobile = useIsMobile();
+export default function POSView({ categories, items, setItems, orders, setOrders, config, demoMode, onToggleMenu }) {
+  const isMobile  = useIsMobile();
+  const isShort   = useIsShort();
+  // Compact layout = cart lives in a sheet (portrait phone) or a centred
+  // modal (short viewport) instead of a fixed side column.
+  const isCompact = isMobile || isShort;
+
+  // ── Fill the viewport below wherever this view starts ──
+  // Measures the distance from the top of this view to the bottom of the
+  // window, so the cart's pinned footer (TOTAL + Pay) always sits at the
+  // bottom of the screen no matter how tall the parent containers are.
+  const rootRef = useRef(null);
+  const [rootH, setRootH] = useState(null);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      if (!rootRef.current) return;
+      const top = rootRef.current.getBoundingClientRect().top;
+      const vh = window.visualViewport?.height ?? window.innerHeight;
+      const h = Math.floor(vh - Math.max(top, 0));
+      // Lowered from 320 so short (landscape) viewports still get measured.
+      setRootH(h > 160 ? h : null); // ignore nonsense values, fall back to 100%
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("orientationchange", measure);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("orientationchange", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [isCompact]);
 
   const [activeCat, setActiveCat] = useState("all");
 
@@ -357,7 +405,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   const [error, setError] = useState("");
   const [toast, setToast] = useState(null);
 
-  // Mobile only: the cart lives in a sheet that slides up over the menu.
+  // Compact layouts only: the cart lives in a sheet/modal over the menu.
   const [cartOpen, setCartOpen] = useState(false);
 
   // ── Built-in QR scanner (promo + rider) ──
@@ -394,19 +442,19 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     saveCartState({ cart, orderType, customerName, contactNumber, tableNo, deliveryAddr, discount, discountType, discountInfo, promo });
   }, [cart, orderType, customerName, contactNumber, tableNo, deliveryAddr, discount, discountType, discountInfo, promo]);
 
-  // Leaving mobile width while the sheet is open would otherwise strand it open.
+  // Leaving compact layout while the sheet/modal is open would otherwise strand it open.
   useEffect(() => {
-    if (!isMobile) setCartOpen(false);
-  }, [isMobile]);
+    if (!isCompact) setCartOpen(false);
+  }, [isCompact]);
 
-  // Stop the page behind the sheet/modals from scrolling on touch devices.
+  // Stop the page behind the sheet/modals from scrolling.
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const lock = isMobile && (cartOpen || modal !== null);
+    const lock = isCompact && (cartOpen || modal !== null);
     const prev = document.body.style.overflow;
     if (lock) document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
-  }, [isMobile, cartOpen, modal]);
+  }, [isCompact, cartOpen, modal]);
 
   // Debounced search of past orders for a matching customer name.
   useEffect(() => {
@@ -891,255 +939,271 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     color: TEXT, fontFamily: FONT, flexShrink: 0, touchAction: "manipulation",
   };
 
-  /* ── Cart contents: shared by the desktop column and the mobile sheet ── */
+  /* ── Cart contents: shared by the desktop column and the sheet/modal ──
+     LAYOUT
+     - One scrollable region (flex:1, minHeight:0, overflowY:auto) holds:
+       order type + customer details, cart items, subtotal, discount, promo.
+     - A pinned footer (flexShrink:0) holds: discount line, TOTAL, warnings,
+       error box and the Clear / Pay buttons.
+     - The items list has no flex:1/overflowY of its own, so it can't
+       collapse to zero height and clip the item row. */
   const cartBody = (
     <>
-      {/* Order type + customer details */}
-      <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-          {ORDER_TYPES.map(t => (
-            <button key={t.key} onClick={() => setOrderType(t.key)}
-              style={{
-                flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
-                cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
-                touchAction: "manipulation",
-                background: orderType === t.key ? DR : SUBTLE, color: orderType === t.key ? "#fff" : MUTED,
-              }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+      {/* ───────── Scrollable region ───────── */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
 
-        {/* Customer name, contact number and address — captured for every
-            order type. Only Pickup & Delivery requires them filled in
-            (see missingDeliveryInfo). */}
-        <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
-          Customer details
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {/* Name field doubles as an existing-customer search: typing a
-              name looks up past orders and offers matches to autofill. */}
-          <div ref={customerFieldRef} style={{ position: "relative" }}>
-            <input
-              value={customerName}
-              onChange={e => { setCustomerName(e.target.value); setShowCustomerSuggestions(true); }}
-              onFocus={() => { if (customerName.trim().length >= CUSTOMER_SEARCH_MIN_CHARS) setShowCustomerSuggestions(true); }}
-              placeholder="Customer name"
-              autoCapitalize="words"
-              autoComplete="off"
-              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
-
-            {showCustomerSuggestions && customerName.trim().length >= CUSTOMER_SEARCH_MIN_CHARS && (
-              <div style={{
-                position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, zIndex: 60,
-                background: BG, border: `1px solid ${BORDER}`, borderRadius: 8,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.15)", maxHeight: 220, overflowY: "auto",
-              }}>
-                {customerSearchLoading && customerSuggestions.length === 0 && (
-                  <div style={{ padding: "10px 12px", fontSize: 12, color: MUTED }}>Searching…</div>
-                )}
-                {!customerSearchLoading && customerSuggestions.length === 0 && (
-                  <div style={{ padding: "10px 12px", fontSize: 12, color: MUTED }}>No existing customer found</div>
-                )}
-                {customerSuggestions.map((row, idx) => (
-                  <button
-                    key={`${row.customer_name}-${row.contact_number}-${idx}`}
-                    onClick={() => selectCustomerSuggestion(row)}
-                    style={{
-                      display: "block", width: "100%", textAlign: "left", cursor: "pointer",
-                      background: "transparent", border: "none", fontFamily: FONT,
-                      padding: isMobile ? "10px 12px" : "8px 12px",
-                      borderBottom: idx < customerSuggestions.length - 1 ? `1px solid ${BORDER}` : "none",
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.background = SUBTLE; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{row.customer_name}</div>
-                    <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {row.contact_number || "No contact number"}
-                      {row.delivery_address ? ` · ${row.delivery_address}` : ""}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
+        {/* Order type + customer details */}
+        <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}` }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            {ORDER_TYPES.map(t => (
+              <button key={t.key} onClick={() => setOrderType(t.key)}
+                style={{
+                  flex: 1, padding: isMobile ? "11px 0" : "7px 0", borderRadius: 6, border: "none",
+                  cursor: "pointer", fontFamily: FONT, fontSize: isMobile ? 12 : 11, fontWeight: 700,
+                  touchAction: "manipulation",
+                  background: orderType === t.key ? DR : SUBTLE, color: orderType === t.key ? "#fff" : MUTED,
+                }}>
+                {t.label}
+              </button>
+            ))}
           </div>
 
-          <div style={{ display: "flex" }}>
-            <span style={{
-              display: "flex", alignItems: "center", flexShrink: 0,
-              padding: isMobile ? "0 12px" : "0 10px",
-              border: `1px solid ${BORDER}`, borderRight: "none",
-              borderRadius: "6px 0 0 6px", background: SUBTLE, color: MUTED,
-              fontWeight: 700, fontFamily: FONT, fontSize: noZoomFont(isMobile),
-            }}>+63</span>
-            <input
-              value={contactNumber}
-              onChange={handleContactChange}
-              placeholder="9171234567"
-              inputMode="numeric"
-              autoComplete="tel-national"
-              maxLength={CONTACT_DIGITS}
-              style={{
-                ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
-                fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px",
-                borderRadius: "0 6px 6px 0",
-              }}
-            />
+          {/* Customer name, contact number and address — captured for every
+              order type. Only Pickup & Delivery requires them filled in
+              (see missingDeliveryInfo). */}
+          <div style={{ fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+            Customer details
           </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Name field doubles as an existing-customer search: typing a
+                name looks up past orders and offers matches to autofill. */}
+            <div ref={customerFieldRef} style={{ position: "relative" }}>
+              <input
+                value={customerName}
+                onChange={e => { setCustomerName(e.target.value); setShowCustomerSuggestions(true); }}
+                onFocus={() => { if (customerName.trim().length >= CUSTOMER_SEARCH_MIN_CHARS) setShowCustomerSuggestions(true); }}
+                placeholder="Customer name"
+                autoCapitalize="words"
+                autoComplete="off"
+                style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
 
-          <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)}
-            placeholder={orderType === "pickup_delivery" ? "Delivery address" : "Address"}
-            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
-        </div>
-      </div>
-
-      {/* Cart items */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "10px 14px" }}>
-        {cart.length === 0 ? (
-          <div style={{ textAlign: "center", color: MUTED, paddingTop: 48 }}>
-            <div style={{ fontSize: 32, marginBottom: 10 }}>🛒</div>
-            <div style={{ fontSize: 14 }}>Cart is empty</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>Tap any menu item to add</div>
-          </div>
-        ) : cart.map(c => {
-          const liveItem = items.find(i => i.id === c.id); // realtime-updated stock
-          const overStock = isTracked(liveItem) && c.qty > Number(liveItem.stock);
-          const uLabel = unitLabel(c.unit);
-          return (
-            <div key={c.id} style={{ display: "flex", flexDirection: "column", padding: "10px 0", borderBottom: `1px solid ${BORDER}` }}>
-              {/* Mobile stacks name above the stepper so long names never squeeze the controls */}
-              <div style={{ display: "flex", alignItems: isMobile ? "flex-start" : "center", flexWrap: isMobile ? "wrap" : "nowrap", gap: isMobile ? 8 : 0 }}>
-                <div style={{ flex: isMobile ? "1 1 100%" : 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 13, fontWeight: 700, color: TEXT,
-                    whiteSpace: isMobile ? "normal" : "nowrap",
-                    overflow: "hidden", textOverflow: "ellipsis",
-                  }}>{c.name}</div>
-                  <div style={{ fontSize: 11, color: MUTED }}>
-                    {fmt(c.price)}{uLabel ? ` / ${c.unit}` : " each"}
-                  </div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: isMobile ? 0 : 8 }}>
-                  <button onClick={() => updateQty(c.id, -1)} aria-label={`Remove one ${c.name}`} style={qtyBtnStyle}>−</button>
-                  <span style={{ fontSize: 14, fontWeight: 800, minWidth: 20, textAlign: "center" }}>{c.qty}</span>
-                  <button onClick={() => updateQty(c.id, 1)} aria-label={`Add one ${c.name}`} style={qtyBtnStyle}>+</button>
-                </div>
+              {showCustomerSuggestions && customerName.trim().length >= CUSTOMER_SEARCH_MIN_CHARS && (
                 <div style={{
-                  minWidth: 68, textAlign: "right", fontSize: 13, fontWeight: 800,
-                  marginLeft: isMobile ? "auto" : 6, alignSelf: "center",
-                }}>{fmt(c.price * c.qty)}</div>
-              </div>
-              {overStock && (
-                <div style={{ fontSize: 11, color: DANGER, fontWeight: 700, marginTop: 4 }}>
-                  ⚠ Only {Number(liveItem.stock)} in stock — {c.qty - Number(liveItem.stock)} over
+                  position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, zIndex: 60,
+                  background: BG, border: `1px solid ${BORDER}`, borderRadius: 8,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.15)", maxHeight: 220, overflowY: "auto",
+                }}>
+                  {customerSearchLoading && customerSuggestions.length === 0 && (
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: MUTED }}>Searching…</div>
+                  )}
+                  {!customerSearchLoading && customerSuggestions.length === 0 && (
+                    <div style={{ padding: "10px 12px", fontSize: 12, color: MUTED }}>No existing customer found</div>
+                  )}
+                  {customerSuggestions.map((row, idx) => (
+                    <button
+                      key={`${row.customer_name}-${row.contact_number}-${idx}`}
+                      onClick={() => selectCustomerSuggestion(row)}
+                      style={{
+                        display: "block", width: "100%", textAlign: "left", cursor: "pointer",
+                        background: "transparent", border: "none", fontFamily: FONT,
+                        padding: isMobile ? "10px 12px" : "8px 12px",
+                        borderBottom: idx < customerSuggestions.length - 1 ? `1px solid ${BORDER}` : "none",
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = SUBTLE; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: TEXT }}>{row.customer_name}</div>
+                      <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {row.contact_number || "No contact number"}
+                        {row.delivery_address ? ` · ${row.delivery_address}` : ""}
+                      </div>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
 
-      {/* Totals + action */}
+            <div style={{ display: "flex" }}>
+              <span style={{
+                display: "flex", alignItems: "center", flexShrink: 0,
+                padding: isMobile ? "0 12px" : "0 10px",
+                border: `1px solid ${BORDER}`, borderRight: "none",
+                borderRadius: "6px 0 0 6px", background: SUBTLE, color: MUTED,
+                fontWeight: 700, fontFamily: FONT, fontSize: noZoomFont(isMobile),
+              }}>+63</span>
+              <input
+                value={contactNumber}
+                onChange={handleContactChange}
+                placeholder="9171234567"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                maxLength={CONTACT_DIGITS}
+                style={{
+                  ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
+                  fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px",
+                  borderRadius: "0 6px 6px 0",
+                }}
+              />
+            </div>
+
+            <input value={deliveryAddr} onChange={e => setDeliveryAddr(e.target.value)}
+              placeholder={orderType === "pickup_delivery" ? "Delivery address" : "Address"}
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "7px 10px" }} />
+          </div>
+        </div>
+
+        {/* Cart items — natural height, never collapses */}
+        <div style={{ minHeight: 72, padding: "10px 14px" }}>
+          {cart.length === 0 ? (
+            <div style={{ textAlign: "center", color: MUTED, padding: "24px 0" }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>🛒</div>
+              <div style={{ fontSize: 14 }}>Cart is empty</div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>Tap any menu item to add</div>
+            </div>
+          ) : cart.map(c => {
+            const liveItem = items.find(i => i.id === c.id); // realtime-updated stock
+            const overStock = isTracked(liveItem) && c.qty > Number(liveItem.stock);
+            const uLabel = unitLabel(c.unit);
+            return (
+              <div key={c.id} style={{ display: "flex", flexDirection: "column", padding: "10px 0", borderBottom: `1px solid ${BORDER}` }}>
+                {/* Mobile stacks name above the stepper so long names never squeeze the controls */}
+                <div style={{ display: "flex", alignItems: isMobile ? "flex-start" : "center", flexWrap: isMobile ? "wrap" : "nowrap", gap: isMobile ? 8 : 0 }}>
+                  <div style={{ flex: isMobile ? "1 1 100%" : 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: 13, fontWeight: 700, color: TEXT,
+                      whiteSpace: isMobile ? "normal" : "nowrap",
+                      overflow: "hidden", textOverflow: "ellipsis",
+                    }}>{c.name}</div>
+                    <div style={{ fontSize: 11, color: MUTED }}>
+                      {fmt(c.price)}{uLabel ? ` / ${c.unit}` : " each"}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: isMobile ? 0 : 8 }}>
+                    <button onClick={() => updateQty(c.id, -1)} aria-label={`Remove one ${c.name}`} style={qtyBtnStyle}>−</button>
+                    <span style={{ fontSize: 14, fontWeight: 800, minWidth: 20, textAlign: "center" }}>{c.qty}</span>
+                    <button onClick={() => updateQty(c.id, 1)} aria-label={`Add one ${c.name}`} style={qtyBtnStyle}>+</button>
+                  </div>
+                  <div style={{
+                    minWidth: 68, textAlign: "right", fontSize: 13, fontWeight: 800,
+                    marginLeft: isMobile ? "auto" : 6, alignSelf: "center",
+                  }}>{fmt(c.price * c.qty)}</div>
+                </div>
+                {overStock && (
+                  <div style={{ fontSize: 11, color: DANGER, fontWeight: 700, marginTop: 4 }}>
+                    ⚠ Only {Number(liveItem.stock)} in stock — {c.qty - Number(liveItem.stock)} over
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Subtotal, discount options, promo code */}
+        <div style={{ padding: "12px 14px", borderTop: `1px solid ${BORDER}` }}>
+
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 13, color: MUTED }}>
+            <span>Subtotal</span>
+            <span style={{ color: TEXT, fontWeight: 600 }}>{fmt(subtotal)}</span>
+          </div>
+
+          {/* Discount type buttons — 2×2 on phones, 4-up on desktop */}
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 6, letterSpacing: 0.3 }}>Discount</div>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 6 }}>
+              {DISCOUNT_TYPES.map(d => (
+                <button key={d.key}
+                  onClick={() => handleDiscountSelect(d)}
+                  style={{
+                    padding: isMobile ? "10px 6px" : "6px 4px", borderRadius: 6, border: "none", cursor: "pointer",
+                    fontFamily: FONT, fontSize: isMobile ? 12 : 10, fontWeight: 700, textAlign: "center",
+                    touchAction: "manipulation", lineHeight: 1.25,
+                    background: discountType === d.key ? DR : SUBTLE,
+                    color: discountType === d.key ? "#fff" : MUTED,
+                  }}>
+                  {d.label}
+                  {d.rate ? <div style={{ fontSize: 9, marginTop: 1, opacity: 0.85 }}>20% off</div> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* PWD / Senior info summary chip */}
+          {discountInfo && (discountType === "pwd" || discountType === "senior") && (
+            <div style={{
+              background: DR_LIGHT, border: `1px solid ${DR}`, borderRadius: 8,
+              padding: "8px 10px", marginBottom: 10, fontSize: 11, wordBreak: "break-word",
+            }}>
+              <div style={{ fontWeight: 800, color: DR, marginBottom: 3 }}>
+                🪪 {discountType === "pwd" ? "PWD" : "Senior Citizen"} — Verified
+              </div>
+              <div style={{ color: TEXT, fontWeight: 600 }}>{discountInfo.name}</div>
+              <div style={{ color: MUTED }}>ID: {discountInfo.idNo}</div>
+              <div style={{ color: MUTED, marginTop: 1 }}>{discountInfo.address}</div>
+              <button
+                onClick={() => { setDiscountType("none"); setDiscountInfo(null); }}
+                style={{ marginTop: 6, background: "none", border: "none", color: DR, fontSize: 11,
+                  fontWeight: 700, cursor: "pointer", padding: isMobile ? "6px 0" : 0, fontFamily: FONT }}>
+                ✕ Remove discount
+              </button>
+            </div>
+          )}
+
+          {/* Custom discount input */}
+          {discountType === "custom" && (
+            <div style={{ display: "flex", alignItems: "center", marginBottom: 10, gap: 8 }}>
+              <span style={{ fontSize: 12, color: MUTED, flexShrink: 0, fontWeight: 600 }}>Amount ₱</span>
+              <input type="number" min="0" inputMode="decimal" value={discount}
+                onChange={e => setDiscount(e.target.value)} placeholder="0"
+                style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
+                  padding: isMobile ? "10px 12px" : "5px 8px", textAlign: "right", fontSize: noZoomFont(isMobile) }} />
+            </div>
+          )}
+
+          {/* Promo code: type it or scan its QR */}
+          <div>
+            <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 6, letterSpacing: 0.3 }}>Promo code</div>
+            {discountType === "promo" && promo ? (
+              <div style={{
+                background: DR_LIGHT, border: `1px solid ${DR}`, borderRadius: 8,
+                padding: "8px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+              }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 800, color: DR, fontSize: 12 }}>🎟️ {promo.code}</div>
+                  <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{promo.label}</div>
+                </div>
+                <button
+                  onClick={() => { setDiscountType("none"); setPromo(null); }}
+                  style={{ background: "none", border: "none", color: DR, fontSize: 11, fontWeight: 700,
+                    cursor: "pointer", fontFamily: FONT, flexShrink: 0, padding: isMobile ? "6px 0" : 0 }}>
+                  ✕ Remove
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  value={promoInput}
+                  onChange={e => setPromoInput(e.target.value.toUpperCase())}
+                  onKeyDown={e => { if (e.key === "Enter") applyPromoCode(promoInput); }}
+                  placeholder="Enter code"
+                  style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
+                    fontSize: noZoomFont(isMobile), padding: isMobile ? "10px 12px" : "6px 8px" }}
+                />
+                <Btn variant="ghost" onClick={() => applyPromoCode(promoInput)}
+                  style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }}>Apply</Btn>
+                <Btn variant="ghost" onClick={() => openScanner("scanPromo")}
+                  style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }} aria-label="Scan promo QR">📷</Btn>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      {/* ───────── end scrollable region ───────── */}
+
+      {/* ───────── Pinned footer: always visible at the bottom ───────── */}
       <div style={{
         padding: "12px 14px", borderTop: `1px solid ${BORDER}`, flexShrink: 0,
         paddingBottom: isMobile ? `calc(12px + ${SAFE_BOTTOM})` : 12,
         background: BG,
       }}>
-
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 13, color: MUTED }}>
-          <span>Subtotal</span>
-          <span style={{ color: TEXT, fontWeight: 600 }}>{fmt(subtotal)}</span>
-        </div>
-
-        {/* Discount type buttons — 2×2 on phones, 4-up on desktop */}
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 6, letterSpacing: 0.3 }}>Discount</div>
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "1fr 1fr 1fr 1fr", gap: 6 }}>
-            {DISCOUNT_TYPES.map(d => (
-              <button key={d.key}
-                onClick={() => handleDiscountSelect(d)}
-                style={{
-                  padding: isMobile ? "10px 6px" : "6px 4px", borderRadius: 6, border: "none", cursor: "pointer",
-                  fontFamily: FONT, fontSize: isMobile ? 12 : 10, fontWeight: 700, textAlign: "center",
-                  touchAction: "manipulation", lineHeight: 1.25,
-                  background: discountType === d.key ? DR : SUBTLE,
-                  color: discountType === d.key ? "#fff" : MUTED,
-                }}>
-                {d.label}
-                {d.rate ? <div style={{ fontSize: 9, marginTop: 1, opacity: 0.85 }}>20% off</div> : null}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* PWD / Senior info summary chip */}
-        {discountInfo && (discountType === "pwd" || discountType === "senior") && (
-          <div style={{
-            background: DR_LIGHT, border: `1px solid ${DR}`, borderRadius: 8,
-            padding: "8px 10px", marginBottom: 10, fontSize: 11, wordBreak: "break-word",
-          }}>
-            <div style={{ fontWeight: 800, color: DR, marginBottom: 3 }}>
-              🪪 {discountType === "pwd" ? "PWD" : "Senior Citizen"} — Verified
-            </div>
-            <div style={{ color: TEXT, fontWeight: 600 }}>{discountInfo.name}</div>
-            <div style={{ color: MUTED }}>ID: {discountInfo.idNo}</div>
-            <div style={{ color: MUTED, marginTop: 1 }}>{discountInfo.address}</div>
-            <button
-              onClick={() => { setDiscountType("none"); setDiscountInfo(null); }}
-              style={{ marginTop: 6, background: "none", border: "none", color: DR, fontSize: 11,
-                fontWeight: 700, cursor: "pointer", padding: isMobile ? "6px 0" : 0, fontFamily: FONT }}>
-              ✕ Remove discount
-            </button>
-          </div>
-        )}
-
-        {/* Custom discount input */}
-        {discountType === "custom" && (
-          <div style={{ display: "flex", alignItems: "center", marginBottom: 10, gap: 8 }}>
-            <span style={{ fontSize: 12, color: MUTED, flexShrink: 0, fontWeight: 600 }}>Amount ₱</span>
-            <input type="number" min="0" inputMode="decimal" value={discount}
-              onChange={e => setDiscount(e.target.value)} placeholder="0"
-              style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
-                padding: isMobile ? "10px 12px" : "5px 8px", textAlign: "right", fontSize: noZoomFont(isMobile) }} />
-          </div>
-        )}
-
-        {/* Promo code: type it or scan its QR */}
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, marginBottom: 6, letterSpacing: 0.3 }}>Promo code</div>
-          {discountType === "promo" && promo ? (
-            <div style={{
-              background: DR_LIGHT, border: `1px solid ${DR}`, borderRadius: 8,
-              padding: "8px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
-            }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 800, color: DR, fontSize: 12 }}>🎟️ {promo.code}</div>
-                <div style={{ fontSize: 11, color: MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{promo.label}</div>
-              </div>
-              <button
-                onClick={() => { setDiscountType("none"); setPromo(null); }}
-                style={{ background: "none", border: "none", color: DR, fontSize: 11, fontWeight: 700,
-                  cursor: "pointer", fontFamily: FONT, flexShrink: 0, padding: isMobile ? "6px 0" : 0 }}>
-                ✕ Remove
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: "flex", gap: 6 }}>
-              <input
-                value={promoInput}
-                onChange={e => setPromoInput(e.target.value.toUpperCase())}
-                onKeyDown={e => { if (e.key === "Enter") applyPromoCode(promoInput); }}
-                placeholder="Enter code"
-                style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
-                  fontSize: noZoomFont(isMobile), padding: isMobile ? "10px 12px" : "6px 8px" }}
-              />
-              <Btn variant="ghost" onClick={() => applyPromoCode(promoInput)}
-                style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }}>Apply</Btn>
-              <Btn variant="ghost" onClick={() => openScanner("scanPromo")}
-                style={{ flexShrink: 0, padding: isMobile ? "10px 12px" : "6px 10px" }} aria-label="Scan promo QR">📷</Btn>
-            </div>
-          )}
-        </div>
 
         {/* Discount line */}
         {discAmt > 0 && (
@@ -1154,7 +1218,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
           </div>
         )}
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 14, borderTop: `2px solid ${TEXT}`, paddingTop: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: isShort ? 10 : 14, borderTop: `2px solid ${TEXT}`, paddingTop: 10 }}>
           <span style={{ fontSize: 17, fontWeight: 800 }}>TOTAL</span>
           <span style={{ fontSize: 22, fontWeight: 800, color: DR }}>{fmt(total)}</span>
         </div>
@@ -1191,20 +1255,43 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   );
 
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: isMobile ? "column" : "row",
-      height: "100%", minHeight: 0, overflow: "hidden",
-      position: "relative",
-    }}>
+    <div
+      ref={rootRef}
+      style={{
+        display: "flex",
+        flexDirection: isCompact ? "column" : "row",
+        height: rootH ?? "100%",
+        minHeight: 0, overflow: "hidden",
+        position: "relative",
+      }}>
 
       {/* ── Menu ── */}
       <div style={{
         flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
-        borderRight: isMobile ? "none" : `1px solid ${BORDER}`,
+        borderRight: isCompact ? "none" : `1px solid ${BORDER}`,
         overflow: "hidden", width: "100%",
       }}>
-        <div style={{ padding: "12px 14px", borderBottom: `1px solid ${BORDER}`, display: "flex", gap: 8, flexShrink: 0 }}>
+        <div style={{ padding: isShort ? "8px 14px" : "12px 14px", borderBottom: `1px solid ${BORDER}`, display: "flex", gap: 8, flexShrink: 0, alignItems: "center" }}>
+
+          {/* Burger — only when the viewport is under 500px tall.
+              display:flex centres the three bars. */}
+          {isShort && onToggleMenu && (
+            <button
+              onClick={onToggleMenu}
+              aria-label="Open menu"
+              style={{
+                display: "flex", flexDirection: "column",
+                justifyContent: "center", alignItems: "center", gap: 4,
+                width: 40, height: 40, flexShrink: 0, padding: 0, cursor: "pointer",
+                background: SUBTLE, border: `1px solid ${BORDER}`, borderRadius: 8,
+                touchAction: "manipulation",
+              }}>
+              {[0, 1, 2].map(i => (
+                <span key={i} style={{ display: "block", width: 18, height: 2, borderRadius: 2, background: TEXT }} />
+              ))}
+            </button>
+          )}
+
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search menu items…"
             type="search" autoCorrect="off"
             style={{ ...inputStyle, flex: 1, minWidth: 0, boxSizing: "border-box",
@@ -1221,13 +1308,13 @@ export default function POSView({ categories, items, setItems, orders, setOrders
           </Btn>
         </div>
 
-        {/* Category pills: scroll sideways on phones instead of wrapping into a tall block */}
+        {/* Category pills: scroll sideways on compact layouts instead of wrapping into a tall block */}
         <div style={{
-          padding: isMobile ? "10px 14px" : "10px 14px",
+          padding: isShort ? "8px 14px" : "10px 14px",
           borderBottom: `1px solid ${BORDER}`,
           display: "flex", gap: 6, flexShrink: 0,
-          flexWrap: isMobile ? "nowrap" : "wrap",
-          overflowX: isMobile ? "auto" : "visible",
+          flexWrap: isCompact ? "nowrap" : "wrap",
+          overflowX: isCompact ? "auto" : "visible",
           WebkitOverflowScrolling: "touch",
           scrollbarWidth: "none",
         }}>
@@ -1240,8 +1327,8 @@ export default function POSView({ categories, items, setItems, orders, setOrders
         <div style={{
           flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch",
           padding: 12,
-          // leave room for the fixed cart bar on mobile
-          paddingBottom: isMobile ? `calc(96px + ${SAFE_BOTTOM})` : 12,
+          // leave room for the fixed cart bar on compact layouts
+          paddingBottom: isCompact ? `calc(${isShort ? 72 : 96}px + ${SAFE_BOTTOM})` : 12,
           display: "grid",
           gridTemplateColumns: isMobile
             ? "repeat(auto-fill, minmax(132px, 1fr))"
@@ -1293,31 +1380,34 @@ export default function POSView({ categories, items, setItems, orders, setOrders
         </div>
       </div>
 
-      {/* ── Cart: fixed column on desktop ── */}
-      {!isMobile && (
-        <div style={{ width: 336, flexShrink: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+      {/* ── Cart: fixed column on wide + tall screens ── */}
+      {!isCompact && (
+        <div style={{
+          width: 336, flexShrink: 0, display: "flex", flexDirection: "column",
+          overflow: "hidden", alignSelf: "stretch", height: "100%",
+        }}>
           {cartBody}
         </div>
       )}
 
-      {/* ── Cart: bottom bar + sheet on mobile ── */}
-      {isMobile && (
+      {/* ── Cart: bottom bar + sheet (portrait phone) / modal (short viewport) ── */}
+      {isCompact && (
         <>
           <div style={{
             position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 120,
             background: BG, borderTop: `1px solid ${BORDER}`,
-            padding: `10px 14px calc(10px + ${SAFE_BOTTOM})`,
+            padding: `${isShort ? 6 : 10}px 14px calc(${isShort ? 6 : 10}px + ${SAFE_BOTTOM})`,
             display: "flex", alignItems: "center", gap: 12,
             boxShadow: "0 -4px 20px rgba(0,0,0,0.08)",
           }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: isShort ? "row" : "column", alignItems: isShort ? "baseline" : "stretch", gap: isShort ? 10 : 0 }}>
               <div style={{ fontSize: 11, color: MUTED, fontWeight: 700 }}>
                 {cartCount === 0 ? "No items yet" : `${cartCount} item${cartCount > 1 ? "s" : ""}`}
               </div>
-              <div style={{ fontSize: 19, fontWeight: 800, color: DR, lineHeight: 1.2 }}>{fmt(total)}</div>
+              <div style={{ fontSize: isShort ? 17 : 19, fontWeight: 800, color: DR, lineHeight: 1.2 }}>{fmt(total)}</div>
             </div>
             <Btn onClick={() => setCartOpen(true)} disabled={cart.length === 0}
-              style={{ padding: "12px 20px", flexShrink: 0 }}>
+              style={{ padding: isShort ? "8px 18px" : "12px 20px", flexShrink: 0 }}>
               View cart
             </Btn>
           </div>
@@ -1328,19 +1418,28 @@ export default function POSView({ categories, items, setItems, orders, setOrders
               style={{
                 position: "fixed", inset: 0, zIndex: 200,
                 background: "rgba(0,0,0,0.45)",
-                display: "flex", alignItems: "flex-end",
+                display: "flex",
+                // short viewport => centred modal; portrait phone => bottom sheet
+                alignItems: isShort ? "center" : "flex-end",
+                justifyContent: "center",
+                padding: isShort ? 8 : 0,
+                boxSizing: "border-box",
                 fontFamily: FONT, overscrollBehavior: "contain",
               }}>
               <div
                 onClick={e => e.stopPropagation()}
                 style={{
-                  background: BG, width: "100%", height: "92vh", maxHeight: "92vh",
-                  borderRadius: "16px 16px 0 0", display: "flex", flexDirection: "column",
-                  overflow: "hidden", boxShadow: "0 -8px 40px rgba(0,0,0,0.25)",
+                  background: BG, width: "100%",
+                  maxWidth: isShort ? 440 : "none",
+                  height: isShort ? "100%" : "92vh",
+                  maxHeight: isShort ? "100%" : "92vh",
+                  borderRadius: isShort ? 12 : "16px 16px 0 0",
+                  display: "flex", flexDirection: "column",
+                  overflow: "hidden", boxShadow: "0 8px 40px rgba(0,0,0,0.25)",
                 }}>
                 <div style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "12px 14px 10px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
+                  padding: isShort ? "8px 14px" : "12px 14px 10px", borderBottom: `1px solid ${BORDER}`, flexShrink: 0,
                 }}>
                   <div style={{ fontSize: 16, fontWeight: 800, color: TEXT }}>
                     Current order {cartCount > 0 && <span style={{ color: MUTED, fontWeight: 700 }}>· {cartCount}</span>}
@@ -1364,6 +1463,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
         <DiscountInfoModal
           type={pendingDiscType}
           isMobile={isMobile}
+          isShort={isShort}
           onConfirm={handleDiscountInfoConfirm}
           onClose={handleDiscountInfoClose}
         />
@@ -1374,13 +1474,15 @@ export default function POSView({ categories, items, setItems, orders, setOrders
           style={{
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
             display: "flex", alignItems: "center", justifyContent: "center",
-            zIndex: 9999, fontFamily: FONT, padding: 16,
+            zIndex: 9999, fontFamily: FONT, padding: isShort ? 8 : 16,
+            boxSizing: "border-box",
           }}>
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              background: BG, borderRadius: 12, padding: 18,
+              background: BG, borderRadius: 12, padding: isShort ? 14 : 18,
               width: isMobile ? "100%" : 400, maxWidth: "100%",
+              maxHeight: "100%", overflowY: "auto",
               boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
               boxSizing: "border-box",
             }}>
@@ -1397,7 +1499,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
                 : "Point the camera at the customer's receipt QR to mark that order as paid."}
             </div>
             <div id={scanRegionId}
-              style={{ width: "100%", minHeight: 260, borderRadius: 8, overflow: "hidden", background: "#000" }} />
+              style={{ width: "100%", minHeight: isShort ? 160 : 260, borderRadius: 8, overflow: "hidden", background: "#000" }} />
             {scanStarting && !scanErr && (
               <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>Starting camera…</div>
             )}
@@ -1422,10 +1524,10 @@ export default function POSView({ categories, items, setItems, orders, setOrders
       {toast && (
         <div style={{
           position: "fixed", zIndex: 300,
-          bottom: isMobile ? `calc(104px + ${SAFE_BOTTOM})` : 24,
-          right: isMobile ? 14 : 24,
-          left: isMobile ? 14 : "auto",
-          textAlign: isMobile ? "center" : "left",
+          bottom: isCompact ? `calc(${isShort ? 72 : 104}px + ${SAFE_BOTTOM})` : 24,
+          right: isCompact ? 14 : 24,
+          left: isCompact ? 14 : "auto",
+          textAlign: isCompact ? "center" : "left",
           background: toast.type === "err" ? DANGER_BG : WARNING_BG,
           color:      toast.type === "err" ? DANGER    : WARNING,
           border: `1px solid ${toast.type === "err" ? DANGER : WARNING}`,
@@ -1437,3 +1539,30 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     </div>
   );
 }
+
+/* ─────────────────────────────────────────────────────────────
+   PARENT COMPONENT (not part of this file) — wire up the drawer:
+
+   const [menuOpen, setMenuOpen] = useState(false);
+   const isShort = useMediaQuery("(max-height: 499px)"); // same query
+
+   <aside className={`sidebar ${menuOpen ? "open" : ""}`}>...</aside>
+   {menuOpen && <div className="backdrop" onClick={() => setMenuOpen(false)} />}
+   <POSView {...props} onToggleMenu={() => setMenuOpen(o => !o)} />
+
+   // close it when a nav item is clicked, and when the window grows tall again:
+   useEffect(() => { if (!isShort) setMenuOpen(false); }, [isShort]);
+
+   CSS:
+   .backdrop { display: none; }
+   @media (max-height: 499px) {
+     .sidebar {
+       position: fixed; top: 0; left: 0; bottom: 0; width: 240px;
+       z-index: 1001; overflow-y: auto;
+       transform: translateX(-100%); transition: transform .25s ease;
+     }
+     .sidebar.open { transform: translateX(0); }
+     .backdrop { display: block; position: fixed; inset: 0;
+                 background: rgba(0,0,0,.45); z-index: 1000; }
+   }
+───────────────────────────────────────────────────────────── */

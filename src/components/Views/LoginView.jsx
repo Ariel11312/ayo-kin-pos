@@ -4,7 +4,11 @@ import { useNavigate } from "react-router-dom";
 
 // — styles.js tokens (inline for portability) —
 const DR       = "#247494";
+const DR_DARK  = "#0B2C38";
+const DR_DEEP  = "#061A21";
 const DR_LIGHT = "#FFF0F0";
+const RED      = "#C81E1E";
+const RED_DARK = "#6d0000";
 const BG       = "#FFFFFF";
 const TEXT     = "#111111";
 const MUTED    = "#666666";
@@ -27,6 +31,28 @@ const inputStyle = {
   transition: "border-color 0.15s",
 };
 
+// Hand-placed bubble positions so the underwater backdrop is deterministic
+// (no Math.random at render time). top/left are % of the panel, size in px.
+const BUBBLES = [
+  { top: 4,  left: 8,  size: 46, opacity: 0.22 },
+  { top: 10, left: 62, size: 70, opacity: 0.16 },
+  { top: 18, left: 30, size: 22, opacity: 0.30 },
+  { top: 22, left: 85, size: 34, opacity: 0.20 },
+  { top: 30, left: 12, size: 90, opacity: 0.12 },
+  { top: 38, left: 48, size: 16, opacity: 0.35 },
+  { top: 44, left: 74, size: 50, opacity: 0.18 },
+  { top: 52, left: 20, size: 28, opacity: 0.25 },
+  { top: 58, left: 90, size: 20, opacity: 0.28 },
+  { top: 64, left: 5,  size: 34, opacity: 0.20 },
+  { top: 68, left: 55, size: 60, opacity: 0.14 },
+  { top: 74, left: 35, size: 18, opacity: 0.30 },
+  { top: 80, left: 78, size: 26, opacity: 0.22 },
+  { top: 86, left: 15, size: 40, opacity: 0.16 },
+  { top: 92, left: 60, size: 14, opacity: 0.35 },
+  { top: 8,  left: 45, size: 12, opacity: 0.32 },
+  { top: 50, left: 40, size: 24, opacity: 0.24 },
+];
+
 // Tiny matchMedia hook so inline styles can respond to viewport size.
 function useIsMobile(query = "(max-width: 820px)") {
   const [matches, setMatches] = useState(() => {
@@ -46,6 +72,64 @@ function useIsMobile(query = "(max-width: 820px)") {
     };
   }, [query]);
   return matches;
+}
+
+// Chrome/glass "wordmark" text — metallic gradient fill + layered emboss shadow,
+// standing in for the logo artwork without depending on an image file.
+function ChromeText({ children, fontSize, letterSpacing = "1px" }) {
+  return (
+    <span
+      style={{
+        fontFamily: FONT,
+        fontWeight: 800,
+        fontSize,
+        letterSpacing,
+        lineHeight: 1,
+        backgroundImage:
+          "linear-gradient(180deg, #ffffff 0%, #cfe7ee 28%, #7fa9b4 48%, #ffffff 62%, #9fc2cc 80%, #ffffff 100%)",
+        WebkitBackgroundClip: "text",
+        backgroundClip: "text",
+        color: "transparent",
+        textShadow:
+          "0 1px 0 rgba(255,255,255,0.6), 0 -1px 1px rgba(0,0,0,0.35), 0 2px 3px rgba(0,0,0,0.45)",
+        filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.35))",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+// The little red power-button glyph that sits in place of the hyphen in "BULA-ON".
+function PowerBadge({ size }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        margin: "0 6px",
+        flexShrink: 0,
+        background: "radial-gradient(circle at 35% 30%, #3a3a3a, #0c0c0c 70%)",
+        boxShadow: `0 0 0 2px rgba(255,255,255,0.15), 0 0 ${size * 0.5}px ${RED}99, inset 0 2px 3px rgba(255,255,255,0.15)`,
+      }}
+    >
+      <svg width={size * 0.5} height={size * 0.5} viewBox="0 0 24 24" fill="none">
+        <path d="M12 3v8" stroke={RED} strokeWidth="2.4" strokeLinecap="round" />
+        <path
+          d="M7 6.5a8 8 0 1 0 10 0"
+          stroke={RED}
+          strokeWidth="2.4"
+          strokeLinecap="round"
+          fill="none"
+        />
+      </svg>
+    </span>
+  );
 }
 
 export default function LoginView() {
@@ -100,6 +184,9 @@ export default function LoginView() {
     return null;
   }
 
+  const logoSize = isMobile ? 34 : 44;
+  const subSize = isMobile ? 16 : 20;
+
   return (
     <div className="login-root" style={{
       ...styles.root,
@@ -108,9 +195,14 @@ export default function LoginView() {
       <style dangerouslySetInnerHTML={{ __html: `
         body { margin: 0 !important; padding: 0 !important; }
         .login-root { min-height: 100vh; min-height: 100dvh; }
-        .login-submit:hover:not(:disabled) { background: #6d0000; }
+        .login-submit:hover:not(:disabled) { background: ${RED_DARK}; }
         .login-submit:focus-visible,
         .login-root input:focus-visible { outline: 2px solid ${DR}; outline-offset: 2px; }
+        @keyframes bubble-drift {
+          0%   { transform: translateY(0); }
+          50%  { transform: translateY(-14px); }
+          100% { transform: translateY(0); }
+        }
       `}} />
 
       {/* Brand panel — full-width banner on phones, side panel on desktop */}
@@ -119,39 +211,61 @@ export default function LoginView() {
         width: isMobile ? "100%" : "42%",
         minHeight: isMobile ? "auto" : undefined,
       }}>
+        {/* underwater bubble backdrop, built entirely from CSS — no image file */}
+        <div style={styles.bubbleField} aria-hidden>
+          {BUBBLES.map((b, i) => (
+            <span
+              key={i}
+              style={{
+                position: "absolute",
+                top: `${b.top}%`,
+                left: `${b.left}%`,
+                width: b.size,
+                height: b.size,
+                borderRadius: "50%",
+                background:
+                  "radial-gradient(circle at 32% 28%, rgba(255,255,255,0.9), rgba(255,255,255,0.15) 45%, rgba(255,255,255,0) 70%)",
+                border: "1px solid rgba(255,255,255,0.25)",
+                opacity: b.opacity,
+                animation: `bubble-drift ${5 + (i % 4)}s ease-in-out infinite`,
+                animationDelay: `${(i % 5) * 0.6}s`,
+              }}
+            />
+          ))}
+        </div>
+        <div style={styles.gridOverlay} aria-hidden />
+
         <div style={{
           ...styles.brandInner,
           padding: isMobile ? "28px 22px 26px" : "48px 40px",
-          maxWidth: isMobile ? 520 : 340,
+          maxWidth: isMobile ? 520 : 360,
           width: "100%",
         }}>
-          <div style={{ marginBottom: isMobile ? 16 : 24 }}>
-            <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-              <rect width="36" height="36" rx="8" fill={DR} />
-              <path d="M10 26V14l8-4 8 4v12l-8 4-8-4Z" fill="none" stroke="#fff" strokeWidth="1.8" strokeLinejoin="round"/>
-              <circle cx="18" cy="19" r="3" fill="#fff" />
-            </svg>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: isMobile ? "flex-start" : "center", flexWrap: "wrap" }}>
+            <ChromeText fontSize={logoSize}>BULA</ChromeText>
+            <PowerBadge size={logoSize} />
+            <ChromeText fontSize={logoSize}>ON</ChromeText>
+          </div>
+          <div style={{ textAlign: isMobile ? "left" : "center", marginTop: 4 }}>
+            <ChromeText fontSize={subSize * 0.6} letterSpacing="3px">LAUNDRY HUB</ChromeText>
           </div>
 
-          <h1 style={{
-            ...styles.brandName,
-            fontSize: isMobile ? 22 : 28,
+          {/* dark banner strip, like a wet rubber ribbon under the wordmark */}
+          <div style={{
+            ...styles.tagBanner,
+            marginTop: isMobile ? 18 : 26,
+            textAlign: isMobile ? "left" : "center",
           }}>
-            Bula-On Laundry Hub POS
-          </h1>
-          <p style={{
-            ...styles.brandTagline,
-            fontSize: isMobile ? 14 : 15,
-            margin: isMobile ? "0 0 20px" : "0 0 36px",
-          }}>
-            Fast, reliable point-of-sale for every transaction.
-          </p>
+            We wash, we deliver
+          </div>
 
           <div style={{
             ...styles.featureList,
             flexDirection: isMobile ? "row" : "column",
             flexWrap: isMobile ? "wrap" : "nowrap",
             gap: isMobile ? "8px 16px" : 12,
+            marginTop: isMobile ? 18 : 28,
+            justifyContent: isMobile ? "flex-start" : "center",
           }}>
             {["Live inventory tracking", "Sales analytics", "Void & refund management"].map((f) => (
               <div key={f} style={styles.featureItem}>
@@ -161,9 +275,6 @@ export default function LoginView() {
             ))}
           </div>
         </div>
-
-        {/* subtle grid overlay */}
-        <div style={styles.gridOverlay} aria-hidden />
       </div>
 
       {/* Form panel */}
@@ -272,12 +383,17 @@ const styles = {
   // ── brand panel ───────────────────────────────────────────────
   brand: {
     position: "relative",
-    background: DR,
+    background: `radial-gradient(circle at 50% -10%, #3f95b0 0%, ${DR} 35%, ${DR_DARK} 75%, ${DR_DEEP} 100%)`,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
     flexShrink: 0,
+  },
+  bubbleField: {
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
   },
   brandInner: {
     position: "relative",
@@ -285,16 +401,19 @@ const styles = {
     color: "#fff",
     boxSizing: "border-box",
   },
-  brandName: {
-    margin: "0 0 10px",
-    fontWeight: 700,
-    letterSpacing: "-0.5px",
+  tagBanner: {
+    display: "inline-block",
+    width: "100%",
+    padding: "8px 14px",
+    background: "linear-gradient(180deg, rgba(0,0,0,0.55), rgba(0,0,0,0.75))",
+    border: "1px solid rgba(255,255,255,0.15)",
+    borderRadius: 4,
     color: "#fff",
-    lineHeight: 1.2,
-  },
-  brandTagline: {
-    lineHeight: 1.6,
-    color: "rgba(255,255,255,0.75)",
+    fontStyle: "italic",
+    fontWeight: 600,
+    fontSize: 15,
+    letterSpacing: "0.3px",
+    boxSizing: "border-box",
   },
   featureList: {
     display: "flex",
