@@ -8,6 +8,33 @@ import { supabase } from "../../supabase/supabase";
 
 const COMPANY_NAME = "Bula-On Laundry Hub";
 
+// Shared modal styles. The overlay scrolls if the viewport is very short,
+// and the box itself is capped to the viewport height (minus the overlay's
+// 16px top + bottom padding) with its own scroll bar, so tall content like
+// the QR + details never gets cut off on small screens or zoomed browsers.
+const modalOverlay = {
+  position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
+  display: "flex", alignItems: "center", justifyContent: "center",
+  zIndex: 9999, fontFamily: FONT, padding: 16,
+  overflowY: "auto",
+  boxSizing: "border-box",
+};
+
+const modalBox = (isMobile, width, padding, extra = {}) => ({
+  background: BG, borderRadius: 12, padding,
+  width: isMobile ? "100%" : width, maxWidth: "100%",
+  boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
+  boxSizing: "border-box",
+  maxHeight: "calc(100vh - 32px)",
+  overflowY: "auto",
+  ...extra,
+});
+
+// Keeps the action buttons pinned to the bottom of the scrolling box.
+const stickyFooter = {
+  position: "sticky", bottom: 0, background: BG, paddingTop: 10,
+};
+
 // Pulls the order id back out of a rider-slip QR payload, which the POS's
 // RiderQRModal encodes as "Order ID: ...\nCustomer: ...\nAddress: ...".
 const parseRiderOrderId = (decodedText) => {
@@ -80,7 +107,7 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(true);
 
-  // FIX: keep the latest onDetected in a ref instead of putting it in the
+  // Keep the latest onDetected in a ref instead of putting it in the
   // effect's dependency array. Whoever renders <QrScanModal onDetected={
   // (text) => handleScanned(text) }> passes a brand-new function on every
   // parent re-render — with `onDetected` as a dependency, the start-camera
@@ -195,28 +222,14 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
         cameraReleaseChain = cameraReleaseChain.then(() => myTurn).catch(() => {});
       }
     };
-    // FIX: `onDetected` removed from deps — see onDetectedRef above. Only
-    // `regionId` (stable for the life of this instance) should restart the
-    // camera; it never actually changes, so in practice this effect now
+    // Only `regionId` (stable for the life of this instance) should restart
+    // the camera; it never actually changes, so in practice this effect
     // runs exactly once per mount, as intended.
   }, [regionId]);
 
-  const overlay = {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    zIndex: 9999, fontFamily: FONT, padding: 16,
-  };
-
-  const box = {
-    background: BG, borderRadius: 12, padding: 18,
-    width: isMobile ? "100%" : 400, maxWidth: "100%",
-    boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
-    boxSizing: "border-box",
-  };
-
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={box} onClick={e => e.stopPropagation()}>
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalBox(isMobile, 400, 18)} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>{title}</div>
         <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>
           {subtitle}
@@ -228,7 +241,7 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
         {err && (
           <div style={{ fontSize: 12, color: "#e53e3e", marginTop: 10, fontWeight: 600 }}>⚠ {err}</div>
         )}
-        <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+        <div style={{ ...stickyFooter, marginTop: 14, paddingBottom: 2, display: "flex", justifyContent: "flex-end" }}>
           <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         </div>
       </div>
@@ -287,22 +300,9 @@ function OrderDetailModal({ order, onClose, onMarkDelivered, isMobile }) {
     win.document.close();
   };
 
-  const overlay = {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    zIndex: 9999, fontFamily: FONT, padding: 16,
-  };
-
-  const box = {
-    background: BG, borderRadius: 12, padding: 22,
-    width: isMobile ? "100%" : 380, maxWidth: "100%",
-    boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
-    boxSizing: "border-box", textAlign: "center",
-  };
-
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={box} onClick={e => e.stopPropagation()}>
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalBox(isMobile, 380, 22, { textAlign: "center" })} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 11, fontWeight: 800, color: DR, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 2 }}>
           {COMPANY_NAME}
         </div>
@@ -327,18 +327,20 @@ function OrderDetailModal({ order, onClose, onMarkDelivered, isMobile }) {
           <div><strong>Placed:</strong> {fmtTime(order.created_at)}</div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <Btn variant="ghost" onClick={handlePrint} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
-            🖨 Print
-          </Btn>
-          <Btn onClick={() => onMarkDelivered(order.id)} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
-            ✓ Mark delivered
-          </Btn>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <Btn variant="ghost" onClick={onClose} style={{ width: "100%", padding: isMobile ? "12px 0" : "9px 0" }}>
-            Close
-          </Btn>
+        <div style={{ ...stickyFooter, marginTop: 6 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <Btn variant="ghost" onClick={handlePrint} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
+              🖨 Print
+            </Btn>
+            <Btn onClick={() => onMarkDelivered(order.id)} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
+              ✓ Mark delivered
+            </Btn>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Btn variant="ghost" onClick={onClose} style={{ width: "100%", padding: isMobile ? "12px 0" : "9px 0" }}>
+              Close
+            </Btn>
+          </div>
         </div>
       </div>
     </div>
@@ -393,22 +395,9 @@ function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
     win.document.close();
   };
 
-  const overlay = {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    zIndex: 9999, fontFamily: FONT, padding: 16,
-  };
-
-  const box = {
-    background: BG, borderRadius: 12, padding: 22,
-    width: isMobile ? "100%" : 380, maxWidth: "100%",
-    boxShadow: "0 8px 40px rgba(0,0,0,0.25)", border: `1px solid ${BORDER}`,
-    boxSizing: "border-box", textAlign: "center",
-  };
-
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={box} onClick={e => e.stopPropagation()}>
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalBox(isMobile, 380, 22, { textAlign: "center" })} onClick={e => e.stopPropagation()}>
         <div style={{ fontSize: 11, fontWeight: 800, color: DR, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 2 }}>
           {COMPANY_NAME}
         </div>
@@ -422,11 +411,13 @@ function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
           🕒 PAY LATER — UNPAID
         </div>
 
-        <div style={{
-          display: "inline-block", borderRadius: 8, overflow: "hidden",
-          border: `1px solid ${BORDER}`, lineHeight: 0,
-        }}>
-          <QRCodeCanvas ref={canvasRef} value={payload} size={200} level="M" marginSize={2} />
+        <div>
+          <div style={{
+            display: "inline-block", borderRadius: 8, overflow: "hidden",
+            border: `1px solid ${BORDER}`, lineHeight: 0,
+          }}>
+            <QRCodeCanvas ref={canvasRef} value={payload} size={200} level="M" marginSize={2} />
+          </div>
         </div>
 
         <div style={{
@@ -439,18 +430,20 @@ function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
           <div><strong>Placed:</strong> {fmtTime(order.created_at)}</div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <Btn variant="ghost" onClick={handlePrint} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
-            🖨 Print
-          </Btn>
-          <Btn onClick={() => onMarkPaid(order.id)} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
-            ✓ Mark paid
-          </Btn>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <Btn variant="ghost" onClick={onClose} style={{ width: "100%", padding: isMobile ? "12px 0" : "9px 0" }}>
-            Close
-          </Btn>
+        <div style={{ ...stickyFooter, marginTop: 6 }}>
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <Btn variant="ghost" onClick={handlePrint} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
+              🖨 Print
+            </Btn>
+            <Btn onClick={() => onMarkPaid(order.id)} style={{ flex: 1, padding: isMobile ? "12px 0" : "9px 0" }}>
+              ✓ Mark paid
+            </Btn>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Btn variant="ghost" onClick={onClose} style={{ width: "100%", padding: isMobile ? "12px 0" : "9px 0" }}>
+              Close
+            </Btn>
+          </div>
         </div>
       </div>
     </div>
@@ -610,7 +603,11 @@ export default function RiderScannerView({ orders, setOrders }) {
   };
 
   return (
-    <div style={{ fontFamily: FONT, padding: 20, maxWidth: 760, margin: "0 auto" }}>
+    // Outer wrapper is the scroll container: it fills the space under the
+    // top bar and scrolls its own content. The inner div keeps the centered
+    // 760px column.
+    <div style={{ height: "100%", overflowY: "auto", boxSizing: "border-box" }}>
+    <div style={{ fontFamily: FONT, padding: 20, paddingBottom: 60, maxWidth: 760, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: TEXT }}>Rider Scanner</div>
@@ -766,7 +763,7 @@ export default function RiderScannerView({ orders, setOrders }) {
 
       {toast && (
         <div style={{
-          position: "fixed", zIndex: 300, bottom: 24, right: 24,
+          position: "fixed", zIndex: 10000, bottom: 24, right: 24,
           background: toast.type === "err" ? "#FDECEA" : "#FEF3CD",
           color: toast.type === "err" ? "#C0392B" : "#B7770D",
           border: `1px solid ${toast.type === "err" ? "#C0392B" : "#B7770D"}`,
@@ -775,6 +772,7 @@ export default function RiderScannerView({ orders, setOrders }) {
           {toast.msg}
         </div>
       )}
+    </div>
     </div>
   );
 }
