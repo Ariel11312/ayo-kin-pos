@@ -26,8 +26,6 @@ import KioskQR from "./Views/Kiosqr";
 
 const LOGO_RED = "#C81E1E";
 
-// Chrome/glass wordmark text — same metallic treatment used on the login screen,
-// sized down here to fit the sidebar.
 function ChromeText({ children, fontSize, letterSpacing = "0.5px" }) {
   return (
     <span
@@ -52,7 +50,6 @@ function ChromeText({ children, fontSize, letterSpacing = "0.5px" }) {
   );
 }
 
-// Small red power-button glyph standing in for the hyphen in "BULA-ON".
 function PowerBadge({ size }) {
   return (
     <span
@@ -127,7 +124,6 @@ export default function App() {
   useEffect(() => { setDemoMode(!config.supabaseUrl || !config.supabaseKey); }, [config]);
   useEffect(() => { const t = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(t); }, []);
 
-  // Close the mobile drawer automatically if the window is resized back to desktop width
   useEffect(() => {
     function onResize() {
       if (window.innerWidth > 860) setMobileNavOpen(false);
@@ -139,7 +135,7 @@ export default function App() {
   const handleSetView = (key) => {
     setView(key);
     localStorage.setItem("pos_view", key);
-    setMobileNavOpen(false); // auto-close drawer after picking a page on mobile
+    setMobileNavOpen(false);
   };
 
   async function handleLogout() {
@@ -165,7 +161,6 @@ export default function App() {
     { key: "kiosqr", emoji: "📱", label: "Kiosk QR" },
   ];
 
-  // ── Sales / pending computations ──
   const allOrders = orders || [];
 
   const startOfToday = new Date(clock);
@@ -213,8 +208,38 @@ export default function App() {
           display: flex;
           flex-direction: column;
           flex-shrink: 0;
+          height: 100vh;
           min-height: 0;
+          overflow: hidden;
         }
+
+        /* Regions: header fixed, nav flexes+scrolls, footer fixed+capped. */
+        .sidebar-header { flex-shrink: 0; }
+        .sidebar-nav {
+          flex: 1 1 0;
+          min-height: 0;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+        }
+        .sidebar-footer {
+          flex-shrink: 0;
+          max-height: 42vh;
+          overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          overscroll-behavior: contain;
+        }
+
+        /* Custom slim scrollbar for the nav + footer so they don't look cut off */
+        .sidebar-nav::-webkit-scrollbar,
+        .sidebar-footer::-webkit-scrollbar { width: 6px; }
+        .sidebar-nav::-webkit-scrollbar-thumb,
+        .sidebar-footer::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.25);
+          border-radius: 3px;
+        }
+        .sidebar-nav::-webkit-scrollbar-track,
+        .sidebar-footer::-webkit-scrollbar-track { background: transparent; }
 
         .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
@@ -230,6 +255,7 @@ export default function App() {
             transform: translateX(-100%);
             transition: transform 0.25s ease;
             box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+            height: 100vh;
           }
           .sidebar.open { transform: translateX(0); }
 
@@ -286,19 +312,24 @@ export default function App() {
 
         {/* ── Sidebar ── */}
         <div className={`sidebar ${mobileNavOpen ? "open" : ""}`}>
-          <div style={{ padding: "20px 18px 16px", borderBottom: "1px solid rgba(255,255,255,0.12)", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          {/* Header */}
+          <div className="sidebar-header" style={{
+            padding: "16px 18px 12px",
+            borderBottom: "1px solid rgba(255,255,255,0.12)",
+            display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+          }}>
             <div>
               <div style={{ display: "flex", alignItems: "center" }}>
                 <ChromeText fontSize={16}>BULA</ChromeText>
                 <PowerBadge size={16} />
                 <ChromeText fontSize={16}>ON</ChromeText>
               </div>
-              <div style={{ fontSize: 9, letterSpacing: 2.5, textTransform: "uppercase", opacity: 0.7, marginTop: 3, marginBottom: 10, fontWeight: 700, color: "#fff" }}>
+              <div style={{ fontSize: 9, letterSpacing: 2.5, textTransform: "uppercase", opacity: 0.7, marginTop: 3, marginBottom: 6, fontWeight: 700, color: "#fff" }}>
                 Laundry Hub
               </div>
               <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5 }}>SalesPoint</div>
               {demoMode && (
-                <div style={{ marginTop: 8, display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.18)", padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
+                <div style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(255,255,255,0.18)", padding: "3px 10px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
                   ● Live Mode
                 </div>
               )}
@@ -306,81 +337,89 @@ export default function App() {
             <button className="sidebar-close-btn" onClick={() => setMobileNavOpen(false)} aria-label="Close menu">✕</button>
           </div>
 
-          <nav style={{ flex: 1, padding: "8px 0", overflowY: "auto", minHeight: 0 }}>
+          {/* Nav — scrolls independently */}
+          <nav className="sidebar-nav" style={{ padding: "4px 0" }}>
             {navItems.map(({ key, emoji, label }) => {
               const active = view === key;
               return (
                 <button key={key} onClick={() => handleSetView(key)}
                   style={{
-                    display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "13px 18px",
-                    background: active ? "rgba(255,255,255,0.18)" : "transparent", color: "#fff", border: "none", cursor: "pointer",
-                    fontFamily: FONT, fontSize: 13, fontWeight: active ? 800 : 400,
-                    borderLeft: active ? "3px solid rgba(255,255,255,0.9)" : "3px solid transparent"
+                    display: "flex", alignItems: "center", gap: 10,
+                    width: "100%", textAlign: "left",
+                    padding: "9px 16px",
+                    background: active ? "rgba(255,255,255,0.18)" : "transparent",
+                    color: "#fff", border: "none", cursor: "pointer",
+                    fontFamily: FONT, fontSize: 12.5, fontWeight: active ? 800 : 400,
+                    borderLeft: active ? "3px solid rgba(255,255,255,0.9)" : "3px solid transparent",
+                    lineHeight: 1.3,
                   }}>
-                  <span style={{ fontSize: 16 }}>{emoji}</span> {label}
+                  <span style={{ fontSize: 15, flexShrink: 0 }}>{emoji}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
                 </button>
               );
             })}
           </nav>
 
-          <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)", overflowY: "auto", flexShrink: 0, maxHeight: "60%" }}>
-            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 2 }}>Today's Sales</div>
-            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>{fmt(todaySales)}</div>
-
-            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 2 }}>
-              Paid Pendings Today ({paidPendingsToday.length})
+          {/* Footer — compact inline stats */}
+          <div className="sidebar-footer" style={{
+            padding: "10px 14px 12px",
+            borderTop: "1px solid rgba(255,255,255,0.12)",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Today's Sales</span>
+              <span style={{ fontSize: 13, fontWeight: 800 }}>{fmt(todaySales)}</span>
             </div>
-            <div style={{ fontSize: 16, fontWeight: 800, color: PAID_COLOR, marginBottom: 8 }}>
-              {fmt(paidPendingsTotal)}
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Pendings ({paidPendingsToday.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: PAID_COLOR }}>{fmt(paidPendingsTotal)}</span>
             </div>
 
             <div style={{
-              padding: "8px 10px", marginBottom: 8,
+              padding: "6px 10px", marginBottom: 5,
               background: "rgba(255,255,255,0.18)",
               border: "1px solid rgba(255,255,255,0.35)",
               borderRadius: 7,
+              display: "flex", justifyContent: "space-between", alignItems: "baseline",
             }}>
-              <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 2 }}>Grand Total Today</div>
-              <div style={{ fontSize: 20, fontWeight: 800 }}>{fmt(grandTotal)}</div>
+              <span style={{ fontSize: 10, opacity: 0.85 }}>Grand Total</span>
+              <span style={{ fontSize: 15, fontWeight: 800 }}>{fmt(grandTotal)}</span>
             </div>
 
-            <button
+            <div
               onClick={() => handleSetView("orders")}
               title="View orders"
               style={{
-                display: "block", width: "100%", textAlign: "left",
-                padding: "8px 10px", marginBottom: 12,
+                padding: "6px 10px", marginBottom: 8,
                 background: "rgba(255,255,255,0.1)",
                 border: "1px solid rgba(255,255,255,0.2)",
-                borderRadius: 7, cursor: "pointer", fontFamily: FONT, color: "#fff",
+                borderRadius: 7,
+                display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                cursor: "pointer",
               }}
             >
-              <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 2 }}>
-                Pending Today ({pendingTodayOrders.length})
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: PENDING_COLOR }}>
-                {fmt(pendingTodayTotal)}
-              </div>
-            </button>
-
-            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", lineHeight: 1.5, marginBottom: 14 }}>
-              {clock.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" }) + " "}
-              {clock.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              <span style={{ fontSize: 10, opacity: 0.8 }}>Pending ({pendingTodayOrders.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(pendingTodayTotal)}</span>
             </div>
+
+            <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", textAlign: "center", marginBottom: 8 }}>
+              {clock.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" })} · {clock.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}
+            </div>
+
             <button
               onClick={() => setShowLogoutConfirm(true)}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                width: "100%", padding: "9px 0",
+                width: "100%", padding: "8px 0",
                 background: "rgba(255,255,255,0.1)", color: "#fff",
                 border: "1px solid rgba(255,255,255,0.25)", borderRadius: 7,
-                fontFamily: FONT, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                fontFamily: FONT, fontSize: 12, fontWeight: 700, cursor: "pointer",
                 transition: "background 0.15s",
               }}
               onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.18)"}
               onMouseLeave={(e) => e.currentTarget.style.background = "rgba(255,255,255,0.1)"}
             >
-              <span style={{ fontSize: 14 }}>↪</span> Log out
+              <span style={{ fontSize: 13 }}>↪</span> Log out
             </button>
           </div>
         </div>
@@ -405,7 +444,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Content */}
           <div className="content-area" style={{ flex: 1, overflow: "hidden" }}>
             {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
             {view === "menu" && <MenuView categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
@@ -425,7 +463,6 @@ export default function App() {
 
       {showConfig && <ConfigPanel config={config} setConfig={setConfig} demoMode={demoMode} setDemoMode={setDemoMode} onClose={() => setShowConfig(false)} />}
 
-      {/* ── Logout confirmation ── */}
       {showLogoutConfirm && (
         <div
           style={{

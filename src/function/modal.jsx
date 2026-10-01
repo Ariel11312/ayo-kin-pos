@@ -176,10 +176,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
   // counter — so there's no cash-in-hand to count or change to give here.
   const isPickupDelivery = orderType === "pickup_delivery";
 
-  // GCash/Card require a configured PayMongo key — locked otherwise,
-  // even in demo mode.
-  const onlineUnlocked = !!config?.paymongoKey;
-
+  // GCash is always selectable (manual reference entry). Card was removed.
   const isPayLater = method === "pay_later";
 
   const handlePay = async () => {
@@ -195,13 +192,12 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
       }
 
       let payRef = ref;
-      if (!demoMode && config.paymongoKey && method !== "cash") {
-        const pmMethods = { gcash: "gcash", card: "card" };
+      if (!demoMode && config?.paymongoKey && method === "gcash") {
         const pm = await pmReq(config, "payment_intents", {
           data: {
             attributes: {
               amount: Math.round(total * 100),
-              payment_method_allowed: [pmMethods[method]],
+              payment_method_allowed: ["gcash"],
               currency: "PHP",
               description: `POS Order — ${new Date().toLocaleString("en-PH")}`,
             },
@@ -216,23 +212,23 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
     }
   };
 
+  // GCash is no longer locked behind a PayMongo key — the cashier can
+  // always enter a reference number manually. Card option removed.
   const methods = [
     { key: "cash",      emoji: "💵", label: "Cash",      locked: false },
-    { key: "gcash",     emoji: "📱", label: "GCash",     locked: !onlineUnlocked },
-    { key: "card",      emoji: "💳", label: "Card",      locked: !onlineUnlocked },
+    { key: "gcash",     emoji: "📱", label: "GCash",     locked: false },
     { key: "pay_later", emoji: "🕒", label: "Pay Later", locked: false },
   ];
 
   return (
     <Modal title="Process Payment" onClose={onClose} width={420}>
       <div style={{ padding: 22 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
           {methods.map(m => (
             <button
               key={m.key}
               onClick={() => { if (m.locked) return; setMethod(m.key); setRef(""); setError(""); }}
               disabled={m.locked}
-              title={m.locked ? "Add a PayMongo API key in settings to enable this payment method" : undefined}
               style={{
                 padding: "12px 6px", borderRadius: 8, fontFamily: FONT, fontWeight: 700, fontSize: 12, textAlign: "center",
                 cursor: m.locked ? "not-allowed" : "pointer",
@@ -250,12 +246,6 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
             </button>
           ))}
         </div>
-
-        {!onlineUnlocked && (
-          <div style={{ fontSize: 11, color: MUTED, marginBottom: 16, textAlign: "center" }}>
-            🔒 GCash & Card are locked — configure a PayMongo API key to enable online payments.
-          </div>
-        )}
 
         <div style={{ background: SUBTLE, borderRadius: 8, padding: "14px 18px", marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontSize: 13, color: MUTED }}>Amount Due</span>
@@ -298,14 +288,9 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
           </>
         )}
 
-        {method === "gcash" && onlineUnlocked && (
+        {method === "gcash" && (
           <Field label="GCash Reference No.">
             <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. REF123456789" style={{ ...inputStyle }} autoFocus />
-          </Field>
-        )}
-        {method === "card" && onlineUnlocked && (
-          <Field label="Card Approval Code">
-            <input value={ref} onChange={e => setRef(e.target.value)} placeholder="e.g. APPR-123456" style={{ ...inputStyle }} autoFocus />
           </Field>
         )}
 

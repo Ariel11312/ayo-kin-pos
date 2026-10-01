@@ -8,10 +8,6 @@ import { supabase } from "../../supabase/supabase";
 
 const COMPANY_NAME = "Bula-On Laundry Hub";
 
-// Shared modal styles. The overlay scrolls if the viewport is very short,
-// and the box itself is capped to the viewport height (minus the overlay's
-// 16px top + bottom padding) with its own scroll bar, so tall content like
-// the QR + details never gets cut off on small screens or zoomed browsers.
 const modalOverlay = {
   position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
   display: "flex", alignItems: "center", justifyContent: "center",
@@ -30,22 +26,15 @@ const modalBox = (isMobile, width, padding, extra = {}) => ({
   ...extra,
 });
 
-// Keeps the action buttons pinned to the bottom of the scrolling box.
 const stickyFooter = {
   position: "sticky", bottom: 0, background: BG, paddingTop: 10,
 };
 
-// Pulls the order id back out of a rider-slip QR payload, which the POS's
-// RiderQRModal encodes as "Order ID: ...\nCustomer: ...\nAddress: ...".
 const parseRiderOrderId = (decodedText) => {
   const match = (decodedText || "").match(/Order ID:\s*(\S+)/i);
   return match ? match[1] : null;
 };
 
-// Pulls the order id back out of a receipt's "Pay Later" confirmation QR,
-// which ReceiptModal encodes as "PAYLATER-CONFIRM:<order id>". Kept in a
-// distinct, simple format so it's never confused with the rider payload
-// above, even if a receipt somehow carried both.
 const parsePayLaterOrderId = (decodedText) => {
   const match = (decodedText || "").trim().match(/^PAYLATER-CONFIRM:(\S+)$/i);
   return match ? match[1] : null;
@@ -62,35 +51,9 @@ const fmtTime = (iso) => {
   }
 };
 
-/* ─────────────────────────────────────────────
-   QR Scan Modal — opens the camera, reads a QR,
-   hands the raw decoded text back. Generic over
-   what kind of QR it's expecting (rider slip or
-   pay-later confirmation) via `title`/`subtitle`;
-   the caller decides how to interpret the text.
-───────────────────────────────────────────── */
-// Give every mounted scanner its own DOM id rather than one fixed id. If a
-// second Html5Qrcode instance is ever constructed before the first one's
-// DOM node has fully torn down (e.g. opening the scanner again quickly
-// after closing it), some html5-qrcode versions throw *synchronously* from
-// `new Html5Qrcode()` or `.stop()`. An uncaught throw inside a mounted
-// component with no error boundary blanks the entire React app — which is
-// what was happening here.
 let qrScanInstanceCounter = 0;
-
-// Tracks the teardown of whichever QrScanModal instance was mounted most
-// recently. A new instance awaits this before touching the camera, so it
-// never races the previous instance for the device. Without this, closing
-// the scanner and reopening it quickly leaves the old `stop()` still
-// in flight when the new `start()` fires — on many browsers that means the
-// camera device is still locked, and the new `start()` promise just never
-// settles (neither resolves nor rejects), which is what an infinite
-// "Starting camera…" spinner looks like.
 let cameraReleaseChain = Promise.resolve();
 
-// A `start()` call that never settles is otherwise fatal to the UI — this
-// wraps any promise so it always resolves/rejects within `ms`, turning a
-// silent hang into a visible error.
 const withTimeout = (promise, ms, message) =>
   new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), ms);
@@ -107,22 +70,9 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
   const [err, setErr] = useState("");
   const [starting, setStarting] = useState(true);
 
-  // Keep the latest onDetected in a ref instead of putting it in the
-  // effect's dependency array. Whoever renders <QrScanModal onDetected={
-  // (text) => handleScanned(text) }> passes a brand-new function on every
-  // parent re-render — with `onDetected` as a dependency, the start-camera
-  // effect below would re-run on every one of those re-renders, tearing
-  // down and restarting the camera each time. That's what caused the
-  // "Starting camera…" spinner to loop endlessly instead of settling.
   const onDetectedRef = useRef(onDetected);
   useEffect(() => { onDetectedRef.current = onDetected; }, [onDetected]);
 
-  // Stopping a scanner that never finished starting, or stopping/clearing
-  // it twice, is what tends to throw. This helper makes teardown safe to
-  // call from both the detection handler and the unmount cleanup without
-  // letting either throw escape uncaught. Returns a promise that resolves
-  // once the camera device has actually been released, so callers (see
-  // `cameraReleaseChain` below) can wait on it.
   const safeTeardown = (html5Qr) => {
     let resolveDone;
     const done = new Promise((res) => { resolveDone = res; });
@@ -135,8 +85,6 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
           resolveDone();
         });
     } catch {
-      // stop() itself threw synchronously (e.g. scanner was never running) —
-      // still try to clear so the DOM node is left in a clean state.
       try { html5Qr.clear(); } catch { /* ignore */ }
       resolveDone();
     }
@@ -147,16 +95,9 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
     let cancelled = false;
     let html5Qr;
 
-    // Wait for any previous instance's camera to actually be released
-    // before requesting it again, then run the rest of the startup only if
-    // this effect hasn't since been cleaned up (e.g. modal closed while
-    // we were waiting).
     const myTurn = cameraReleaseChain.then(async () => {
       if (cancelled) return;
 
-      // Explicit permission check up front: getUserMedia rejects clearly
-      // on denial/no-camera, instead of leaving start() to hang on some
-      // browsers when there's no environment-facing camera to grab.
       let stream;
       try {
         stream = await withTimeout(
@@ -168,8 +109,6 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
         if (!cancelled) setErr("Camera unavailable: " + (e?.message || String(e)));
         return;
       }
-      // We only needed this to confirm access / surface a clear error;
-      // html5-qrcode opens its own stream via start() below.
       stream.getTracks().forEach((t) => t.stop());
       if (cancelled) return;
 
@@ -189,14 +128,10 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
             if (cancelled) return;
             cancelled = true;
             const text = decodedText.trim();
-            // Tear down the camera first, but don't make the caller wait on
-            // it — `onDetected` (which typically closes this modal, unmounting
-            // it) can run right away. The unmount cleanup below is guarded to
-            // no-op safely if this teardown is still in flight.
             cameraReleaseChain = safeTeardown(html5Qr);
             onDetectedRef.current(text);
           },
-          () => {} // per-frame "no QR found yet" — ignore
+          () => {}
         ),
         8000,
         "Camera took too long to start — try closing other apps/tabs using it."
@@ -204,9 +139,6 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
         .then(() => { if (!cancelled) setStarting(false); })
         .catch((e) => {
           if (!cancelled) setErr("Camera unavailable: " + (e?.message || String(e)));
-          // The start() call may still land after our timeout fires; make
-          // sure we release the device rather than leaving it locked for
-          // the next instance.
           cameraReleaseChain = safeTeardown(html5Qr);
         });
     });
@@ -216,15 +148,9 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
       if (html5Qr) {
         cameraReleaseChain = safeTeardown(html5Qr);
       } else {
-        // We were still waiting our turn (or on the permission prompt) when
-        // this unmounted — chain onto myTurn so a late-arriving stream still
-        // gets released instead of leaking.
         cameraReleaseChain = cameraReleaseChain.then(() => myTurn).catch(() => {});
       }
     };
-    // Only `regionId` (stable for the life of this instance) should restart
-    // the camera; it never actually changes, so in practice this effect
-    // runs exactly once per mount, as intended.
   }, [regionId]);
 
   return (
@@ -249,12 +175,6 @@ function QrScanModal({ onDetected, onClose, isMobile, title, subtitle }) {
   );
 }
 
-/* ─────────────────────────────────────────────
-   Order Detail / QR Modal — Rider (Pickup & Delivery)
-   Lets staff re-open an order's rider QR (to
-   reprint a lost slip) or confirm delivery by
-   hand when scanning isn't practical.
-───────────────────────────────────────────── */
 function OrderDetailModal({ order, onClose, onMarkDelivered, isMobile }) {
   const canvasRef = useRef(null);
 
@@ -347,13 +267,6 @@ function OrderDetailModal({ order, onClose, onMarkDelivered, isMobile }) {
   );
 }
 
-/* ─────────────────────────────────────────────
-   Order Detail / QR Modal — Pay Later
-   Same idea as OrderDetailModal above, but for
-   an order awaiting payment rather than delivery:
-   re-open/reprint its confirm-payment QR, or mark
-   it paid by hand when scanning isn't practical.
-───────────────────────────────────────────── */
 function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
   const canvasRef = useRef(null);
 
@@ -451,19 +364,104 @@ function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
-   Rider Scanner — main view
-   Sidebar page: scan a delivery slip's QR to
-   close out a Pickup & Delivery order, scan a
-   Pay Later receipt's QR to confirm payment, or
-   pick one from the pending lists by hand.
+   Confirm Payment Modal — NEW
+   Asks whether a Pay Later order was settled
+   in Cash or GCash before marking it paid.
 ───────────────────────────────────────────── */
+function ConfirmPaymentModal({ order, onClose, onConfirm, busy }) {
+  const [method, setMethod] = useState("cash");
+  const [ref, setRef] = useState("");
+  const [err, setErr] = useState("");
+
+  const handleConfirm = () => {
+    if (method === "gcash" && !ref.trim()) {
+      setErr("GCash reference number is required.");
+      return;
+    }
+    setErr("");
+    onConfirm({ method, ref: ref.trim() });
+  };
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalBox(false, 360, 22)} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 4 }}>
+          Confirm payment
+        </div>
+        <div style={{ fontSize: 12, color: MUTED, marginBottom: 14 }}>
+          How was order <b>{order.id}</b> settled?
+        </div>
+
+        <div style={{
+          background: SUBTLE, borderRadius: 8, padding: "10px 14px",
+          display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16,
+        }}>
+          <span style={{ fontSize: 12, color: MUTED }}>Amount Due</span>
+          <span style={{ fontSize: 18, fontWeight: 800, color: DR }}>{fmt(order.total)}</span>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+          {[
+            { key: "cash",  emoji: "💵", label: "Cash"  },
+            { key: "gcash", emoji: "📱", label: "GCash" },
+          ].map(m => (
+            <button
+              key={m.key}
+              onClick={() => { setMethod(m.key); setErr(""); if (m.key === "cash") setRef(""); }}
+              style={{
+                padding: "14px 6px", borderRadius: 8, fontFamily: FONT, fontWeight: 700, fontSize: 13,
+                textAlign: "center", cursor: "pointer",
+                border: method === m.key ? `2px solid ${DR}` : `1.5px solid ${BORDER}`,
+                background: method === m.key ? DR_LIGHT : BG,
+                color: method === m.key ? DR : TEXT,
+              }}>
+              <div style={{ fontSize: 22, marginBottom: 4 }}>{m.emoji}</div>
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {method === "gcash" && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5 }}>
+              GCash Reference No.
+            </div>
+            <input
+              value={ref}
+              onChange={e => setRef(e.target.value)}
+              placeholder="e.g. REF123456789"
+              autoFocus
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 7, border: `1px solid ${BORDER}`, fontFamily: FONT, fontSize: 13.5, boxSizing: "border-box" }}
+            />
+          </div>
+        )}
+
+        {err && (
+          <div style={{ fontSize: 12, color: "#e53e3e", marginBottom: 12, fontWeight: 600 }}>⚠ {err}</div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <Btn variant="ghost" onClick={onClose} disabled={busy} style={{ flex: 1, padding: "10px 0" }}>
+            Cancel
+          </Btn>
+          <Btn onClick={handleConfirm} disabled={busy} style={{ flex: 1.4, padding: "10px 0" }}>
+            {busy ? "Saving…" : `✓ Mark as ${method === "cash" ? "Cash" : "GCash"}`}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RiderScannerView({ orders, setOrders }) {
-  // Which scanner is open, if any: null | "rider" | "paylater".
   const [scanMode, setScanMode] = useState(null);
-  const [selected, setSelected] = useState(null);       // pickup_delivery order shown in OrderDetailModal
-  const [selectedPayLater, setSelectedPayLater] = useState(null); // pay_later order shown in PayLaterDetailModal
+  const [selected, setSelected] = useState(null);
+  const [selectedPayLater, setSelectedPayLater] = useState(null);
   const [toast, setToast] = useState(null);
   const [busyId, setBusyId] = useState(null);
+
+  // NEW: which Pay Later order is being confirmed (Cash vs GCash).
+  const [confirmingPay, setConfirmingPay] = useState(null);
 
   const showToast = (msg, type = "warn") => {
     setToast({ msg, type });
@@ -478,10 +476,6 @@ export default function RiderScannerView({ orders, setOrders }) {
     [orders]
   );
 
-  // Any order — walk-in or pickup & delivery — paid via "Pay Later" and
-  // still unpaid. Kept separate from `pending` above: a pickup_delivery
-  // order could in principle be both awaiting delivery AND awaiting
-  // payment, so the two lists aren't mutually exclusive.
   const pendingPayLater = useMemo(
     () =>
       (orders || [])
@@ -497,12 +491,6 @@ export default function RiderScannerView({ orders, setOrders }) {
 
     setBusyId(orderId);
 
-    // IMPORTANT: .select() forces Supabase to return the rows it actually
-    // touched. Without it, `error` comes back null even when RLS silently
-    // blocks the write or the `.eq("id", ...)` match hits zero rows — the
-    // request "succeeds" but nothing in the database changes, which is why
-    // the order can look delivered locally and then revert to pending on
-    // the next refresh/subscription tick.
     const { data, error } = await supabase
       .from("orders")
       .update({ status: "completed" })
@@ -511,21 +499,9 @@ export default function RiderScannerView({ orders, setOrders }) {
 
     setBusyId(null);
 
-    if (error) {
-      showToast(`Could not update order: ${error.message}`, "err");
-      return;
-    }
-
+    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
     if (!data || data.length === 0) {
-      // Zero rows affected with no error — almost always a Row-Level
-      // Security policy blocking the UPDATE for the current role, or the
-      // scanned/selected id not actually matching the `id` column (type
-      // mismatch, stale QR text, etc). Surface this instead of silently
-      // pretending it worked.
-      showToast(
-        `Order ${orderId} was not updated — check update permissions/RLS on "orders".`,
-        "err"
-      );
+      showToast(`Order ${orderId} was not updated — check update permissions/RLS on "orders".`, "err");
       return;
     }
 
@@ -535,11 +511,9 @@ export default function RiderScannerView({ orders, setOrders }) {
     showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
 
-  // Confirms a Pay Later order has now been paid: flips status to
-  // "completed". Same local-first, .select()-verified pattern as
-  // markDelivered above, so a blocked/failed write surfaces clearly
-  // instead of silently pretending to succeed.
-  const markPaid = async (orderId) => {
+  // markPaid now accepts an optional { method, ref } from the confirm modal.
+  // If not given, it behaves exactly like before (status-only update).
+  const markPaid = async (orderId, choice = null) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
     if (order.payment_method !== "pay_later") {
@@ -549,30 +523,32 @@ export default function RiderScannerView({ orders, setOrders }) {
 
     setBusyId(orderId);
 
+    // When the confirm modal supplied a method, persist it alongside the
+    // status change so the order no longer reads as "pay_later" once paid.
+    const updates = { status: "completed" };
+    if (choice?.method) {
+      updates.payment_method = choice.method;      // "cash" | "gcash"
+      updates.payment_ref = choice.ref || null;    // GCash ref when applicable
+    }
+
     const { data, error } = await supabase
       .from("orders")
-      .update({ status: "completed" })
+      .update(updates)
       .eq("id", orderId)
       .select();
 
     setBusyId(null);
 
-    if (error) {
-      showToast(`Could not update order: ${error.message}`, "err");
-      return;
-    }
-
+    if (error) { showToast(`Could not update order: ${error.message}`, "err"); return; }
     if (!data || data.length === 0) {
-      showToast(
-        `Order ${orderId} was not updated — check update permissions/RLS on "orders".`,
-        "err"
-      );
+      showToast(`Order ${orderId} was not updated — check update permissions/RLS on "orders".`, "err");
       return;
     }
 
     const updatedRow = data[0];
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updatedRow } : o));
     setSelectedPayLater(null);
+    setConfirmingPay(null);
     showToast(`Order ${orderId} marked as paid.`, "warn");
   };
 
@@ -599,13 +575,11 @@ export default function RiderScannerView({ orders, setOrders }) {
     if (order.payment_method !== "pay_later") { showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return; }
     if (order.status === "completed") { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
 
-    markPaid(orderId);
+    // Open the Cash/GCash picker instead of silently marking it paid.
+    setConfirmingPay(order);
   };
 
   return (
-    // Outer wrapper is the scroll container: it fills the space under the
-    // top bar and scrolls its own content. The inner div keeps the centered
-    // 760px column.
     <div style={{ height: "100%", overflowY: "auto", boxSizing: "border-box" }}>
     <div style={{ fontFamily: FONT, padding: 20, paddingBottom: 60, maxWidth: 760, margin: "0 auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 10 }}>
@@ -717,7 +691,8 @@ export default function RiderScannerView({ orders, setOrders }) {
                 <Btn variant="ghost" onClick={() => setSelectedPayLater(o)} style={{ padding: "8px 12px" }}>
                   QR
                 </Btn>
-                <Btn onClick={() => markPaid(o.id)} disabled={busyId === o.id} style={{ padding: "8px 12px" }}>
+                {/* Opens the Cash / GCash picker instead of marking paid directly. */}
+                <Btn onClick={() => setConfirmingPay(o)} disabled={busyId === o.id} style={{ padding: "8px 12px" }}>
                   {busyId === o.id ? "…" : "✓ Paid"}
                 </Btn>
               </div>
@@ -756,8 +731,18 @@ export default function RiderScannerView({ orders, setOrders }) {
         <PayLaterDetailModal
           order={selectedPayLater}
           onClose={() => setSelectedPayLater(null)}
-          onMarkPaid={markPaid}
+          onMarkPaid={() => setConfirmingPay(selectedPayLater)}
           isMobile={false}
+        />
+      )}
+
+      {/* Cash / GCash confirm modal */}
+      {confirmingPay && (
+        <ConfirmPaymentModal
+          order={confirmingPay}
+          busy={busyId === confirmingPay.id}
+          onClose={() => setConfirmingPay(null)}
+          onConfirm={(choice) => markPaid(confirmingPay.id, choice)}
         />
       )}
 
