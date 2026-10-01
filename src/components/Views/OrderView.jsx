@@ -20,11 +20,13 @@ const ADDRESS_MAX_LEN  = 150;
 
 const EMPTY_FORM = { type: "", idNo: "", name: "", address: "" };
 
+const PENDING_COLOR = "#D97706";
+
 // Desktop table columns. Columns from CENTER_FROM_INDEX onward (Items,
 // Total, Discount, Payment, Status, Actions) are center-aligned; everything
-// before that (Order ID, Time, Type, and the customer-info columns) reads
-// left-aligned like ordinary text.
-const TABLE_HEADERS = ["Order ID", "Time", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
+// before that (Order ID, Date & Time, Type, and the customer-info columns)
+// reads left-aligned like ordinary text.
+const TABLE_HEADERS = ["Order ID", "Date & Time", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
 const CENTER_FROM_INDEX = TABLE_HEADERS.indexOf("Items");
 
 // ── Date-range (sales period) filter options ──────────────
@@ -40,6 +42,18 @@ const DATE_FILTERS = [
 ];
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+
+// Formats an ISO timestamp as e.g. "October 1, 2026 11:13PM"
+const fmtDateTime = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const date = d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const time = d
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    .replace(/\s/g, ""); // strips normal and narrow no-break spaces → "11:13PM"
+  return `${date} ${time}`;
+};
 
 // Returns { start, end } (end exclusive) for a given filter key, or null
 // for "all" (meaning: no bound, include everything). All boundaries are
@@ -94,6 +108,8 @@ export default function OrdersView({ orders, setOrders }) {
   const [successModal, setSuccessModal]   = useState(null);
   const [discountModal, setDiscountModal] = useState(null); // order obj or null
   const [discountForm, setDiscountForm]   = useState(EMPTY_FORM); // { type, idNo, name, address }
+  const [customersModal, setCustomersModal] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
   const updateOrders = typeof setOrders === "function" ? setOrders : () => {};
 
   // ── Live updates: subscribe to order changes from Supabase Realtime ──
@@ -149,11 +165,11 @@ export default function OrdersView({ orders, setOrders }) {
   // Stop the page behind an open sheet/modal from scrolling on touch devices.
   useEffect(() => {
     if (typeof document === "undefined") return;
-    const lock = isMobile && (!!discountModal || !!selectedOrder || !!confirmModal || !!successModal);
+    const lock = isMobile && (!!discountModal || !!selectedOrder || !!confirmModal || !!successModal || customersModal);
     const prev = document.body.style.overflow;
     if (lock) document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
-  }, [isMobile, discountModal, selectedOrder, confirmModal, successModal]);
+  }, [isMobile, discountModal, selectedOrder, confirmModal, successModal, customersModal]);
 
   // ── Modal helpers ──────────────────────────────────────
   const showConfirm  = (opts)          => setConfirmModal(opts);
@@ -177,6 +193,11 @@ export default function OrdersView({ orders, setOrders }) {
     setDiscountForm(EMPTY_FORM);
   };
 
+  const closeCustomersModal = () => {
+    setCustomersModal(false);
+    setCustomerSearch("");
+  };
+
   // ── Derived data ───────────────────────────────────────
   // Period filter (today / yesterday / week / month / year / all) narrows
   // the order set first; status filter + search then apply on top of that.
@@ -198,11 +219,41 @@ export default function OrdersView({ orders, setOrders }) {
   });
 
   const summaries = [
-    { label: "All Orders", value: periodOrders.length,                                         color: TEXT      },
-    { label: "Completed",  value: periodOrders.filter(o => o.status === "completed").length,   color: SUCCESS   },
-    { label: "Voided",     value: periodOrders.filter(o => o.status === "voided").length,      color: DR        },
-    { label: "Refunded",   value: periodOrders.filter(o => o.status === "refunded").length,    color: "#92400E" },
+    { label: "All Orders", value: periodOrders.length,                                         color: TEXT          },
+    { label: "Pending",    value: periodOrders.filter(o => o.status === "pending").length,     color: PENDING_COLOR },
+    { label: "Completed",  value: periodOrders.filter(o => o.status === "completed").length,   color: SUCCESS       },
+    { label: "Voided",     value: periodOrders.filter(o => o.status === "voided").length,      color: DR            },
+    { label: "Refunded",   value: periodOrders.filter(o => o.status === "refunded").length,    color: "#92400E"     },
   ];
+
+  // ── Previous customers (from ALL completed orders, not just the period) ──
+  // Grouped by contact number, falling back to name when there's no number.
+  const customerList = (() => {
+    const map = new Map();
+    orders
+      .filter(o => o.status === "completed" && (o.customer_name || o.contact_number))
+      .forEach(o => {
+        const key = (o.contact_number || o.customer_name).trim().toLowerCase();
+        const c = map.get(key) || {
+          name: o.customer_name || "—",
+          contact: o.contact_number || "",
+          address: o.delivery_address || "",
+          count: 0, spent: 0, last: o.created_at,
+        };
+        c.count += 1;
+        c.spent += o.total;
+        if (new Date(o.created_at) >= new Date(c.last)) {
+          c.last = o.created_at;
+          c.name = o.customer_name || c.name;
+          c.address = o.delivery_address || c.address;
+        }
+        map.set(key, c);
+      });
+    const q = customerSearch.trim().toLowerCase();
+    return [...map.values()]
+      .filter(c => !q || c.name.toLowerCase().includes(q) || c.contact.toLowerCase().includes(q))
+      .sort((a, b) => new Date(b.last) - new Date(a.last));
+  })();
 
   // ── Print the currently visible orders as a receipt-style report ──
   // Prints exactly what's on screen — respects the active period filter
@@ -225,7 +276,7 @@ export default function OrdersView({ orders, setOrders }) {
     const timeStr = now.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
 
     const orderBlocksHtml = visible.map(o => {
-      const time = new Date(o.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" });
+      const time = fmtDateTime(o.created_at);
       const dm   = DISCOUNT_META[o.discount_type];
 
       const itemsHtml = (o.items || []).map(it => {
@@ -266,6 +317,7 @@ export default function OrdersView({ orders, setOrders }) {
         <div class="line"></div>`;
     }).join("");
 
+    const pendingCount   = periodOrders.filter(o => o.status === "pending").length;
     const completedCount = periodOrders.filter(o => o.status === "completed").length;
     const voidedCount    = periodOrders.filter(o => o.status === "voided").length;
     const refundedCount  = periodOrders.filter(o => o.status === "refunded").length;
@@ -279,7 +331,7 @@ export default function OrdersView({ orders, setOrders }) {
             h2 { text-align: center; margin: 4px 0; font-size: 14px; }
             .sub { text-align: center; font-size: 11px; margin-bottom: 4px; }
             .line { border-top: 1px dashed #000; margin: 10px 0; }
-            .order-head { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
+            .order-head { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; margin-bottom: 2px; }
             .order-meta { font-size: 10px; color: #333; text-transform: uppercase; margin-bottom: 4px; }
             .customer { font-size: 11px; margin-bottom: 6px; line-height: 1.5; }
             table.items { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
@@ -299,7 +351,7 @@ export default function OrdersView({ orders, setOrders }) {
           ${orderBlocksHtml || `<div class="sub">No orders to show.</div>`}
           <div class="totals">
             Orders shown: ${visible.length}<br/>
-            Period total: ${periodOrders.length} · Completed: ${completedCount} · Voided: ${voidedCount} · Refunded: ${refundedCount}<br/>
+            Period total: ${periodOrders.length} · Pending: ${pendingCount} · Completed: ${completedCount} · Voided: ${voidedCount} · Refunded: ${refundedCount}<br/>
             <strong>${headerLabel} sales: ${fmt(periodSales)}</strong>
           </div>
         </body>
@@ -333,6 +385,33 @@ export default function OrdersView({ orders, setOrders }) {
       closeDiscountModal();
       showSuccess("Error", e.message);
     }
+  };
+
+  // ── Complete a pending order ───────────────────────────
+  const completeOrder = (order) => {
+    showConfirm({
+      title:        "Complete Order",
+      message:      `Mark order ${order.id} totalling ${fmt(order.total)} as completed?`,
+      confirmLabel: "Mark Completed",
+      danger:       false,
+      onConfirm:    async () => {
+        try {
+          const { error } = await supabase
+            .from("orders")
+            .update({ status: "completed" })
+            .eq("id", order.id);
+          if (error) throw new Error(error.message);
+          updateOrders(prev => prev.map(o =>
+            o.id === order.id ? { ...o, status: "completed" } : o
+          ));
+          closeConfirm();
+          showSuccess("Order Completed", `Order ${order.id} is now completed.`);
+        } catch (e) {
+          closeConfirm();
+          showSuccess("Error", e.message);
+        }
+      },
+    });
   };
 
   // ── Void order ─────────────────────────────────────────
@@ -426,6 +505,14 @@ export default function OrdersView({ orders, setOrders }) {
     background: bg, color, whiteSpace: "nowrap", touchAction: "manipulation",
   });
 
+  const headerBtn = {
+    padding: isMobile ? "9px 14px" : "7px 14px",
+    borderRadius: 6, border: `1px solid ${BORDER}`, cursor: "pointer",
+    fontFamily: FONT, fontSize: 12, fontWeight: 700, color: MUTED, background: BG,
+    whiteSpace: "nowrap", touchAction: "manipulation", flexShrink: 0,
+    display: "flex", alignItems: "center", gap: 5,
+  };
+
   const modalInput = {
     ...inputStyle, width: "100%", boxSizing: "border-box",
     fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : undefined,
@@ -459,24 +546,20 @@ export default function OrdersView({ orders, setOrders }) {
             from {periodOrders.filter(o => o.status === "completed").length} orders
           </p>
         </div>
-        <button
-          onClick={printOrders}
-          style={{
-            padding: isMobile ? "9px 14px" : "7px 14px",
-            borderRadius: 6, border: `1px solid ${BORDER}`, cursor: "pointer",
-            fontFamily: FONT, fontSize: 12, fontWeight: 700, color: MUTED, background: BG,
-            whiteSpace: "nowrap", touchAction: "manipulation", flexShrink: 0,
-            display: "flex", alignItems: "center", gap: 5,
-          }}
-        >
-          🖨️ Print
-        </button>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={() => setCustomersModal(true)} style={headerBtn}>
+            👥 Customers
+          </button>
+          <button onClick={printOrders} style={headerBtn}>
+            🖨️ Print
+          </button>
+        </div>
       </div>
 
-      {/* Summary cards — 2×2 on phones */}
+      {/* Summary cards — 2-column grid on phones, 5 across on desktop */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
+        gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(5, 1fr)",
         gap: isMobile ? 8 : 12,
         marginBottom: isMobile ? 14 : 22, flexShrink: 0,
       }}>
@@ -536,7 +619,7 @@ export default function OrdersView({ orders, setOrders }) {
           overflowX: isMobile ? "auto" : "visible",
           WebkitOverflowScrolling: "touch", scrollbarWidth: "none",
         }}>
-          {["all", "completed", "voided", "refunded"].map(s => (
+          {["all", "pending", "completed", "voided", "refunded"].map(s => (
             <button
               key={s}
               onClick={() => setFilter(s)}
@@ -564,7 +647,8 @@ export default function OrdersView({ orders, setOrders }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {visible.map(order => {
               const dm         = order.discount_type ? DISCOUNT_META[order.discount_type] : null;
-              const canVoid         = order.status === "completed";
+              const canComplete     = order.status === "pending";
+              const canVoid         = order.status === "completed" || order.status === "pending";
               const canDiscount     = order.status === "completed" && !order.discount_type;
               const canEditDiscount = order.status === "completed" && !!dm;
               const missingId       = !!dm && !order.discount_info?.idNo;
@@ -586,7 +670,7 @@ export default function OrdersView({ orders, setOrders }) {
 
                   {/* Meta line */}
                   <div style={{ fontSize: 12, color: MUTED, marginTop: 5, textTransform: "capitalize" }}>
-                    {new Date(order.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}
+                    {fmtDateTime(order.created_at)}
                     {" · "}{order.type}
                     {" · "}{order.items.length} item{order.items.length !== 1 ? "s" : ""}
                     {" · "}<span style={{ textTransform: "uppercase", fontWeight: 700 }}>{order.payment_method}</span>
@@ -636,11 +720,16 @@ export default function OrdersView({ orders, setOrders }) {
                   )}
 
                   {/* Actions */}
-                  {(canDiscount || canEditDiscount || canVoid) && (
+                  {(canComplete || canDiscount || canEditDiscount || canVoid) && (
                     <div
                       onClick={e => e.stopPropagation()}
                       style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}
                     >
+                      {canComplete && (
+                        <button onClick={() => completeOrder(order)} style={actionBtn(SUCCESS, SUCCESS_BG, SUCCESS)}>
+                          ✓ Complete
+                        </button>
+                      )}
                       {canDiscount && (
                         <button onClick={() => openDiscountModal(order)} style={actionBtn("#D97706", "#FFFBEB", "#92400E")}>
                           + Discount
@@ -704,7 +793,8 @@ export default function OrdersView({ orders, setOrders }) {
                 {visible.map((order, idx) => {
                   const dm          = order.discount_type ? DISCOUNT_META[order.discount_type] : null;
                   const rowBg       = idx % 2 === 0 ? BG : "#FAFAFA";
-                  const canVoid          = order.status === "completed";
+                  const canComplete      = order.status === "pending";
+                  const canVoid          = order.status === "completed" || order.status === "pending";
                   const canDiscount      = order.status === "completed" && !order.discount_type;
                   const canEditDiscount  = order.status === "completed" && !!dm;
                   const missingId        = !!dm && !order.discount_info?.idNo;
@@ -722,9 +812,9 @@ export default function OrdersView({ orders, setOrders }) {
                         {order.id}
                       </td>
 
-                      {/* Time */}
+                      {/* Date & Time */}
                       <td style={{ padding: "10px 14px", color: MUTED, whiteSpace: "nowrap" }}>
-                        {new Date(order.created_at).toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}
+                        {fmtDateTime(order.created_at)}
                       </td>
 
                       {/* Type */}
@@ -802,6 +892,11 @@ export default function OrdersView({ orders, setOrders }) {
                       {/* Actions — stop row-click propagation */}
                       <td style={{ padding: "8px 14px", textAlign: "center" }} onClick={e => e.stopPropagation()}>
                         <div style={{ display: "flex", gap: 5, justifyContent: "center", flexWrap: "nowrap" }}>
+                          {canComplete && (
+                            <button onClick={() => completeOrder(order)} style={actionBtn(SUCCESS, SUCCESS_BG, SUCCESS)}>
+                              ✓ Complete
+                            </button>
+                          )}
                           {canDiscount && (
                             <button onClick={() => openDiscountModal(order)} style={actionBtn("#D97706", "#FFFBEB", "#92400E")}>
                               + Discount
@@ -843,6 +938,77 @@ export default function OrdersView({ orders, setOrders }) {
       {/* ── Receipt Modal ── */}
       {selectedOrder && (
         <ReceiptModal order={selectedOrder} isMobile={isMobile} onClose={() => setSelectedOrder(null)} />
+      )}
+
+      {/* ── Previous Customers Modal ── */}
+      {customersModal && (
+        <div
+          onClick={closeCustomersModal}
+          style={{
+            position: "fixed", inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: isMobile ? "flex-end" : "center",
+            justifyContent: "center",
+            padding: isMobile ? 0 : 24,
+            overscrollBehavior: "contain",
+            zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: BG, fontFamily: FONT, boxSizing: "border-box",
+              borderRadius: isMobile ? "16px 16px 0 0" : 14,
+              padding: isMobile ? "20px 16px" : 24,
+              paddingBottom: isMobile ? `calc(20px + ${SAFE_BOTTOM})` : 24,
+              width: isMobile ? "100%" : 520, maxWidth: "100%",
+              maxHeight: isMobile ? "92dvh" : "calc(100vh - 48px)",
+              display: "flex", flexDirection: "column",
+              boxShadow: "0 24px 60px rgba(0,0,0,0.18)",
+            }}
+          >
+            {isMobile && (
+              <div style={{ width: 38, height: 4, borderRadius: 2, background: BORDER, margin: "0 auto 14px", flexShrink: 0 }} />
+            )}
+            <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800 }}>Previous Customers</h3>
+            <p style={{ margin: "0 0 12px", color: MUTED, fontSize: 12 }}>
+              From completed orders · {customerList.length} customer{customerList.length !== 1 ? "s" : ""}
+            </p>
+            <input
+              value={customerSearch}
+              onChange={e => setCustomerSearch(e.target.value)}
+              placeholder="Search name or contact…"
+              style={{ ...modalInput, marginBottom: 12, flexShrink: 0 }}
+            />
+            <div style={{
+              overflowY: "auto", WebkitOverflowScrolling: "touch",
+              flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8,
+            }}>
+              {customerList.map((c, i) => (
+                <div key={i} style={{ border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 12px", flexShrink: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <strong style={{ fontSize: 13 }}>{c.name}</strong>
+                    <span style={{ fontWeight: 800, fontSize: 13, color: DR }}>{fmt(c.spent)}</span>
+                  </div>
+                  {c.contact && <div style={{ fontSize: 12, color: MUTED }}>{c.contact}</div>}
+                  {c.address && <div style={{ fontSize: 12, color: MUTED }}>{c.address}</div>}
+                  <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+                    {c.count} order{c.count !== 1 ? "s" : ""} · Last: {fmtDateTime(c.last)}
+                  </div>
+                </div>
+              ))}
+              {customerList.length === 0 && (
+                <div style={{ textAlign: "center", padding: 32, color: MUTED, fontSize: 13 }}>
+                  No customers found
+                </div>
+              )}
+            </div>
+            <Btn variant="ghost" onClick={closeCustomersModal} style={{ width: "100%", marginTop: 12, flexShrink: 0 }}>
+              Close
+            </Btn>
+          </div>
+        </div>
       )}
 
       {/* ── PWD / Senior Citizen Discount Modal ── */}

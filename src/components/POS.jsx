@@ -163,12 +163,18 @@ export default function App() {
     { key: "calendar", emoji: "📅", label: "Calendar" },
   ];
 
-// Replace the todaySales calculation with this:
-const todaySales = orders
-  ? orders
-    .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === clock.toDateString())
-    .reduce((s, o) => s + o.total, 0)
-  : 0;
+  // Completed sales for today
+  const todaySales = orders
+    ? orders
+      .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === clock.toDateString())
+      .reduce((s, o) => s + o.total, 0)
+    : 0;
+
+  // Pending orders: money still outstanding (all dates, since a pending
+  // order stays pending until it's completed or voided)
+  const pendingOrders = orders ? orders.filter(o => o.status === "pending") : [];
+  const pendingTotal  = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const PENDING_COLOR = "#FCD34D";
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
@@ -298,7 +304,28 @@ const todaySales = orders
 
           <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
             <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 4 }}>Today's Sales</div>
-            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 12 }}>{fmt(todaySales)}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>{fmt(todaySales)}</div>
+
+            {/* Pending total — click to jump to the Orders page */}
+            <button
+              onClick={() => handleSetView("orders")}
+              title="View orders"
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "8px 10px", marginBottom: 12,
+                background: "rgba(255,255,255,0.1)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                borderRadius: 7, cursor: "pointer", fontFamily: FONT, color: "#fff",
+              }}
+            >
+              <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 2 }}>
+                Pending ({pendingOrders.length})
+              </div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: PENDING_COLOR }}>
+                {fmt(pendingTotal)}
+              </div>
+            </button>
+
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", lineHeight: 1.5, marginBottom: 14 }}>
               {clock.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" }) + " "}
               {clock.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -333,6 +360,10 @@ const todaySales = orders
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, color: MUTED, flexShrink: 0 }}>
               <span className="topbar-orders-label">{orders ? orders.length : 0} orders today</span>
+              <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
+              <span className="topbar-orders-label" style={{ fontWeight: 700, color: "#92400E" }}>
+                Pending: {fmt(pendingTotal)}
+              </span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span style={{ fontWeight: 700, color: demoMode ? "#92400E" : SUCCESS }}>{demoMode ? "Live Mode" : "Live"}</span>
             </div>
