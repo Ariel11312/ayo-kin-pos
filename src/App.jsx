@@ -3,6 +3,9 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import POS from "./components/POS";
 import LoginView from './components/Views/LoginView';
 import ProtectedRoute from './components/ProtectedRoute';
+import EmployeeClockPage from "./components/EmployeePhoneClock";
+
+
 const App = () => {
   return (
     <BrowserRouter>
@@ -16,6 +19,7 @@ const App = () => {
             </ProtectedRoute>
           }
         />
+        <Route path="/clock" element={<EmployeeClockPage />} />
       </Routes>
     </BrowserRouter>
   );

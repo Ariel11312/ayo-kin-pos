@@ -22,6 +22,7 @@ import CalendarView from "./Views/CalendarView";
 import ExpensesView from "./Views/ExpensesView";
 import PromoView from "./Views/PromoView";
 import RiderScannerView from "./Views/RiderScanView";
+import KioskQR from "./Views/Kiosqr";
 
 const LOGO_RED = "#C81E1E";
 
@@ -161,6 +162,7 @@ export default function App() {
     { key: "voidRefund", emoji: "↩", label: "Void / Refund" },
     { key: "timeClock", emoji: "🕒", label: "Time Clock" },
     { key: "calendar", emoji: "📅", label: "Calendar" },
+    { key: "kiosqr", emoji: "📱", label: "Kiosk QR" },
   ];
 
   // ── Sales / pending computations ──
@@ -171,31 +173,25 @@ export default function App() {
 
   const isToday = (d) => !!d && new Date(d).toDateString() === clock.toDateString();
 
-  // Date kung kailan binayaran ang order (adjust kung ibang column name ang gamit mo)
   const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
 
-  // Today's sales: completed orders na ginawa today
   const todaySales = allOrders
     .filter(o => o.status === "completed" && isToday(o.created_at))
     .reduce((s, o) => s + (o.total || 0), 0);
 
-  // Pending today: pending orders na ginawa today
   const pendingTodayOrders = allOrders.filter(
     o => o.status === "pending" && isToday(o.created_at)
   );
   const pendingTodayTotal = pendingTodayOrders.reduce((s, o) => s + (o.total || 0), 0);
 
-  // All pending (para sa topbar)
   const pendingOrders = allOrders.filter(o => o.status === "pending");
   const pendingTotal = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
 
-  // Paid pendings today: ginawa nung nakaraang araw, binayaran today
   const paidPendingsToday = allOrders.filter(
     o => o.status === "completed" && !isToday(o.created_at) && isToday(paidDate(o))
   );
   const paidPendingsTotal = paidPendingsToday.reduce((s, o) => s + (o.total || 0), 0);
 
-  // Grand total = today's sales + paid pendings today
   const grandTotal = todaySales + paidPendingsTotal;
 
   const PENDING_COLOR = "#FCD34D";
@@ -283,7 +279,6 @@ export default function App() {
       `}} />
 
       <div className="app-shell">
-        {/* Backdrop (mobile only) */}
         <div
           className={`sidebar-backdrop ${mobileNavOpen ? "open" : ""}`}
           onClick={() => setMobileNavOpen(false)}
@@ -329,11 +324,9 @@ export default function App() {
           </nav>
 
           <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)", overflowY: "auto", flexShrink: 0, maxHeight: "60%" }}>
-            {/* Today's Sales */}
             <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 2 }}>Today's Sales</div>
             <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>{fmt(todaySales)}</div>
 
-            {/* Paid pendings today */}
             <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 2 }}>
               Paid Pendings Today ({paidPendingsToday.length})
             </div>
@@ -341,7 +334,6 @@ export default function App() {
               {fmt(paidPendingsTotal)}
             </div>
 
-            {/* Grand total */}
             <div style={{
               padding: "8px 10px", marginBottom: 8,
               background: "rgba(255,255,255,0.18)",
@@ -352,7 +344,6 @@ export default function App() {
               <div style={{ fontSize: 20, fontWeight: 800 }}>{fmt(grandTotal)}</div>
             </div>
 
-            {/* Pending today — click para pumunta sa Orders */}
             <button
               onClick={() => handleSetView("orders")}
               title="View orders"
@@ -396,7 +387,6 @@ export default function App() {
 
         {/* ── Main ── */}
         <div className="main-area">
-          {/* Topbar */}
           <div className="topbar" style={{ height: 50, padding: "0 22px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: `1px solid ${BORDER}`, flexShrink: 0, gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
               <button className="hamburger-btn" onClick={() => setMobileNavOpen(true)} aria-label="Open menu">☰</button>
@@ -427,8 +417,8 @@ export default function App() {
             {view === "timeClock" && <EmployeeTimeView demoMode={demoMode} />}
             {view === "calendar" && <CalendarView demoMode={demoMode} />}
             {view === "expenses" && <ExpensesView demoMode={demoMode} />}
+            {view === "kiosqr" && <KioskQR secret={config.totpSecret || config.secret} />}
             {view === "promo" && <PromoView />}
-
           </div>
         </div>
       </div>
