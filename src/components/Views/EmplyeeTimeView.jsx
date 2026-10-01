@@ -10,7 +10,7 @@ import { getTimeLogs } from "../data/timelogs";
 import { useIsMobile } from "../hooks/useMediaQuery";
 
 // ── Config ──
-const SHIFT_START = "09:00";         // HH:MM — anyone clocking in after this + grace is "Late"
+const SHIFT_START = "10:00";         // HH:MM — anyone clocking in after this + grace is "Late"
 const LATE_GRACE_MIN = 10;           // grace period
 const SHIFT_END = "18:00";           // used for expected-hours math
 const AUTO_REFRESH_MS = 30 * 1000;   // pull fresh logs every 30s
