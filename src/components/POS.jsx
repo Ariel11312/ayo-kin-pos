@@ -170,9 +170,10 @@ export default function App() {
 
   const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
 
-  const todaySales = allOrders
-    .filter(o => o.status === "completed" && isToday(o.created_at))
-    .reduce((s, o) => s + (o.total || 0), 0);
+  const todayCompleted = allOrders.filter(
+    o => o.status === "completed" && isToday(o.created_at)
+  );
+  const todaySales = todayCompleted.reduce((s, o) => s + (o.total || 0), 0);
 
   const pendingTodayOrders = allOrders.filter(
     o => o.status === "pending" && isToday(o.created_at)
@@ -189,8 +190,19 @@ export default function App() {
 
   const grandTotal = todaySales + paidPendingsTotal;
 
+  // GCash breakdown (today's completed sales + pendings paid today).
+  // Adjust the field names below if your orders use a different column.
+  const isGcash = (o) =>
+    String(o.payment_method || o.paymentMethod || o.payment || "")
+      .toLowerCase()
+      .includes("gcash");
+
+  const gcashOrdersToday = [...todayCompleted, ...paidPendingsToday].filter(isGcash);
+  const gcashTotal = gcashOrdersToday.reduce((s, o) => s + (o.total || 0), 0);
+
   const PENDING_COLOR = "#FCD34D";
   const PAID_COLOR = "#86EFAC";
+  const GCASH_COLOR = "#60A5FA";
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
@@ -370,9 +382,14 @@ export default function App() {
               <span style={{ fontSize: 13, fontWeight: 800 }}>{fmt(todaySales)}</span>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
               <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Pendings ({paidPendingsToday.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: PAID_COLOR }}>{fmt(paidPendingsTotal)}</span>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>GCash Paid ({gcashOrdersToday.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: GCASH_COLOR }}>{fmt(gcashTotal)}</span>
             </div>
 
             <div style={{
