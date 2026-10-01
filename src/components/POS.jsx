@@ -179,11 +179,11 @@ export default function App() {
     .filter(o => o.status === "completed" && isToday(o.created_at))
     .reduce((s, o) => s + (o.total || 0), 0);
 
-  // Past pending: pending pa rin, ginawa BEFORE today
-  const pastPendingOrders = allOrders.filter(
-    o => o.status === "pending" && new Date(o.created_at) < startOfToday
+  // Pending today: pending orders na ginawa today
+  const pendingTodayOrders = allOrders.filter(
+    o => o.status === "pending" && isToday(o.created_at)
   );
-  const pastPendingTotal = pastPendingOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const pendingTodayTotal = pendingTodayOrders.reduce((s, o) => s + (o.total || 0), 0);
 
   // All pending (para sa topbar)
   const pendingOrders = allOrders.filter(o => o.status === "pending");
@@ -352,7 +352,7 @@ export default function App() {
               <div style={{ fontSize: 20, fontWeight: 800 }}>{fmt(grandTotal)}</div>
             </div>
 
-            {/* Past pending — click para pumunta sa Orders */}
+            {/* Pending today — click para pumunta sa Orders */}
             <button
               onClick={() => handleSetView("orders")}
               title="View orders"
@@ -365,10 +365,10 @@ export default function App() {
               }}
             >
               <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 2 }}>
-                Past Pending ({pastPendingOrders.length})
+                Pending Today ({pendingTodayOrders.length})
               </div>
               <div style={{ fontSize: 16, fontWeight: 800, color: PENDING_COLOR }}>
-                {fmt(pastPendingTotal)}
+                {fmt(pendingTodayTotal)}
               </div>
             </button>
 

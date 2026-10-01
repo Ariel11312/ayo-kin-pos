@@ -13,6 +13,11 @@ const PURPLE     = "#8E44AD";
 const TEAL       = "#16A085";
 const PIE_COLORS = [DR, BLUE, STOCK_OK, STOCK_LOW, PURPLE, TEAL, "#D35400", "#1ABC9C"];
 
+// ── Month / year filter ────────────────────────────────────────────────────────
+const MONTHS_FULL  = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ACTIVE_BTN   = "#111111"; // selected month pill (black, like the Orders page)
+
 // ── Shared primitives ──────────────────────────────────────────────────────────
 
 /** Wraps content that must keep a minimum width and scroll sideways on small screens */
@@ -234,7 +239,10 @@ export default function StatisticsView() {
   const isMobile = useIsMobile();
   const isTablet = useIsTablet();
 
-  const [range, setRange]         = useState("7d");
+  const today = new Date();
+  // month: "all" = every month of the selected year, or 0–11 for a single month
+  const [year, setYear]           = useState(today.getFullYear());
+  const [month, setMonth]         = useState(today.getMonth());
   const [orders, setOrders]       = useState([]);
   const [categories, setCategories] = useState([]);
   const [items, setItems]         = useState([]);
@@ -298,19 +306,31 @@ export default function StatisticsView() {
 
   const now = new Date();
 
-  // ── Date-range filter ───────────────────────────────────────────────────────
-  const filtered = useMemo(() => {
-    const daysMap = { today: 1, "7d": 7, "30d": 30, all: 9999 };
-    const d = daysMap[range] || 7;
-    const cutoff = new Date(now);
-    cutoff.setDate(cutoff.getDate() - (d - 1));
-    cutoff.setHours(0, 0, 0, 0);
-    return orders.filter((o) => new Date(o.created_at) >= cutoff);
-  }, [orders, range]);
+  // ── Year dropdown options: current year + every year that has orders ───────
+  const yearOptions = useMemo(() => {
+    const set = new Set([new Date().getFullYear(), year]);
+    orders.forEach((o) => {
+      const y = new Date(o.created_at).getFullYear();
+      if (!isNaN(y)) set.add(y);
+    });
+    return [...set].sort((a, b) => b - a);
+  }, [orders, year]);
 
-  const completed = filtered.filter((o) => o.status === "completed");
-  const voided    = filtered.filter((o) => o.status === "voided");
-  const refunded  = filtered.filter((o) => o.status === "refunded");
+  // ── Month + year filter ─────────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    return orders.filter((o) => {
+      const d = new Date(o.created_at);
+      if (isNaN(d.getTime())) return false;
+      if (d.getFullYear() !== year) return false;
+      return month === "all" || d.getMonth() === month;
+    });
+  }, [orders, year, month]);
+
+  const periodLabel = month === "all" ? `${year}` : `${MONTHS_FULL[month]} ${year}`;
+
+  const completed = useMemo(() => filtered.filter((o) => o.status === "completed"), [filtered]);
+  const voided    = useMemo(() => filtered.filter((o) => o.status === "voided"),    [filtered]);
+  const refunded  = useMemo(() => filtered.filter((o) => o.status === "refunded"),  [filtered]);
 
   const totalRevenue  = completed.reduce((s, o) => s + o.total, 0);
   const totalDiscount = completed.reduce((s, o) => s + (o.discount || 0), 0);
@@ -338,20 +358,28 @@ export default function StatisticsView() {
   });
   const discountData = Object.entries(discountMap).map(([k, v], i) => ({ label: k, value: v, color: PIE_COLORS[(i + 2) % PIE_COLORS.length] }));
 
-  const barDays = range === "today" ? 1 : range === "7d" ? 7 : range === "30d" ? 30 : 14;
+  // Revenue bars:
+  //  • a single month selected → one bar per day of that month (1 … 28/30/31)
+  //  • "All Months"            → one bar per month of the selected year (Jan … Dec)
   const dailyRevenue = useMemo(() => {
-    const buckets = {};
-    for (let i = barDays - 1; i >= 0; i--) {
-      const d = new Date(now); d.setDate(d.getDate() - i);
-      const key = d.toLocaleDateString("en-PH", { month: "short", day: "numeric" });
-      buckets[key] = 0;
+    if (month === "all") {
+      const buckets = MONTHS_SHORT.map((label) => ({ label, value: 0 }));
+      completed.forEach((o) => {
+        buckets[new Date(o.created_at).getMonth()].value += o.total;
+      });
+      return buckets;
     }
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const buckets = Array.from({ length: daysInMonth }, (_, i) => ({ label: String(i + 1), value: 0 }));
     completed.forEach((o) => {
-      const key = new Date(o.created_at).toLocaleDateString("en-PH", { month: "short", day: "numeric" });
-      if (key in buckets) buckets[key] += o.total;
+      buckets[new Date(o.created_at).getDate() - 1].value += o.total;
     });
-    return Object.entries(buckets).map(([label, value]) => ({ label, value }));
-  }, [completed, range, barDays]);
+    return buckets;
+  }, [completed, year, month]);
+
+  const revenueTitle = month === "all"
+    ? `Monthly Revenue — ${year}`
+    : `Daily Revenue — ${MONTHS_FULL[month]} ${year}`;
 
   const itemQtyMap = {};
   completed.forEach((o) => { (o.items || []).forEach((it) => { itemQtyMap[it.name] = (itemQtyMap[it.name] || 0) + it.qty; }); });
@@ -431,9 +459,10 @@ export default function StatisticsView() {
         velocityMap[it.name] = (velocityMap[it.name] || 0) + it.qty;
       });
     });
+    const nowDate = new Date();
     let oldestDate = new Date();
     allCompleted.forEach((o) => { const d = new Date(o.created_at); if (d < oldestDate) oldestDate = d; });
-    const totalDays = Math.max((now - oldestDate) / (1000 * 60 * 60 * 24), 1);
+    const totalDays = Math.max((nowDate - oldestDate) / (1000 * 60 * 60 * 24), 1);
 
     const coverageData = real
       .map((i) => {
@@ -490,13 +519,6 @@ export default function StatisticsView() {
     };
   }, [items, categories, orders]);
 
-  const ranges = [
-    { key: "today", label: "Today" },
-    { key: "7d",    label: "7 Days" },
-    { key: "30d",   label: "30 Days" },
-    { key: "all",   label: "All Time" },
-  ];
-
   // ── Responsive layout helpers ──────────────────────────────────────────────
   const cols = (mobile, tablet, desktop) => (isMobile ? mobile : isTablet ? tablet : desktop);
   const gap  = isMobile ? 10 : 14;
@@ -505,6 +527,17 @@ export default function StatisticsView() {
   // Side-by-side pie + legend only where there's room
   const pieRowStyle = { display: "flex", flexDirection: isMobile ? "column" : "row", gap: isMobile ? 12 : 16, alignItems: "center" };
   const pieColStyle = { display: "flex", flexDirection: "column", gap: 14, alignItems: "center" };
+
+  // Month pill button style (black when selected)
+  const monthBtn = (active) => ({
+    padding: isMobile ? "9px 14px" : "7px 14px",
+    borderRadius: 8, border: "none", cursor: "pointer",
+    fontFamily: FONT, fontSize: 12, fontWeight: 700,
+    whiteSpace: "nowrap", flexShrink: 0, touchAction: "manipulation",
+    minHeight: isMobile ? 38 : undefined,
+    background: active ? ACTIVE_BTN : SUBTLE,
+    color:      active ? "#fff" : MUTED,
+  });
 
   if (loading && orders.length === 0) return (
     <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", minHeight: 240, fontFamily: FONT, color: MUTED, padding: 20, textAlign: "center" }}>
@@ -528,7 +561,7 @@ export default function StatisticsView() {
       <div style={{
         display: "flex", flexDirection: isMobile ? "column" : "row",
         justifyContent: "space-between", alignItems: isMobile ? "stretch" : "flex-start",
-        gap: 12, marginBottom: 20,
+        gap: 12, marginBottom: 14,
       }}>
         <div>
           <h2 style={{ margin: 0, fontSize: isMobile ? 17 : 19, fontWeight: 800 }}>Statistics</h2>
@@ -537,43 +570,69 @@ export default function StatisticsView() {
           </p>
         </div>
 
-        <div style={{
-          display: "flex", flexDirection: isMobile ? "column" : "row",
-          alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 10 : 14,
-        }}>
-          {/* Live badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: MUTED, flexWrap: "wrap" }}>
-            <div style={{
-              width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
-              background: liveFlash ? "#27AE60" : "#4ade80",
-              boxShadow: liveFlash ? "0 0 0 4px rgba(39,174,96,0.3)" : "none",
-              transition: "all 0.3s ease",
-            }} />
-            <span style={{ fontWeight: 700, color: "#27AE60" }}>LIVE</span>
-            {lastUpdated && (
-              <span style={{ color: MUTED, fontWeight: 400 }}>
-                · updated {lastUpdated.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-              </span>
-            )}
-          </div>
-
-          {/* Range buttons — scroll sideways instead of squashing */}
+        {/* Live badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: MUTED, flexWrap: "wrap" }}>
           <div style={{
-            display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch",
-            paddingBottom: isMobile ? 2 : 0,
-          }}>
-            {ranges.map((r) => (
-              <button key={r.key} onClick={() => setRange(r.key)}
-                style={{ padding: isMobile ? "9px 16px" : "6px 14px", borderRadius: 6, border: "none", cursor: "pointer",
-                  fontFamily: FONT, fontSize: 12, fontWeight: 700, flex: isMobile ? "1 0 auto" : "0 0 auto",
-                  whiteSpace: "nowrap", minHeight: isMobile ? 40 : undefined,
-                  background: range === r.key ? DR : SUBTLE,
-                  color: range === r.key ? "#fff" : MUTED }}>
-                {r.label}
-              </button>
-            ))}
-          </div>
+            width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+            background: liveFlash ? "#27AE60" : "#4ade80",
+            boxShadow: liveFlash ? "0 0 0 4px rgba(39,174,96,0.3)" : "none",
+            transition: "all 0.3s ease",
+          }} />
+          <span style={{ fontWeight: 700, color: "#27AE60" }}>LIVE</span>
+          {lastUpdated && (
+            <span style={{ color: MUTED, fontWeight: 400 }}>
+              · updated {lastUpdated.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            </span>
+          )}
         </div>
+      </div>
+
+      {/* ── Month + Year filter ────────────────────────────────────────────── */}
+      <div style={{
+        display: "flex", alignItems: isMobile ? "stretch" : "center",
+        flexDirection: isMobile ? "column" : "row",
+        gap: 10, marginBottom: 6,
+      }}>
+        {/* Month pills — scroll sideways when they don't fit */}
+        <div style={{
+          display: "flex", gap: 6, flex: 1, minWidth: 0,
+          overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none",
+          paddingBottom: 2,
+        }}>
+          <button onClick={() => setMonth("all")} style={monthBtn(month === "all")}>
+            All Months
+          </button>
+          {MONTHS_FULL.map((m, i) => (
+            <button key={m} onClick={() => setMonth(i)} style={monthBtn(month === i)}>
+              {m}
+            </button>
+          ))}
+        </div>
+
+        {/* Year selector */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
+          justifyContent: isMobile ? "flex-start" : "flex-end",
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: MUTED, letterSpacing: 0.6 }}>YEAR</span>
+          <select
+            value={year}
+            onChange={(e) => setYear(Number(e.target.value))}
+            style={{
+              padding: isMobile ? "10px 12px" : "7px 12px",
+              borderRadius: 8, border: `1px solid ${BORDER}`, background: BG, color: TEXT,
+              fontFamily: FONT, fontSize: isMobile ? 16 : 13, fontWeight: 700, cursor: "pointer",
+              minWidth: 90,
+            }}
+          >
+            {yearOptions.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: MUTED, marginBottom: 4 }}>
+        Showing sales for <strong style={{ color: TEXT }}>{month === "all" ? `all months of ${year}` : periodLabel}</strong>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════
@@ -592,8 +651,8 @@ export default function StatisticsView() {
 
       {/* Row 1 */}
       <div style={{ display: "grid", gridTemplateColumns: cols("1fr", "1fr", "1fr 340px"), gap, marginBottom: gap }}>
-        <ChartCard compact={isMobile} title={`Daily Revenue — ${ranges.find(r => r.key === range)?.label}`}>
-          {dailyRevenue.length > 0
+        <ChartCard compact={isMobile} title={revenueTitle}>
+          {dailyRevenue.some((d) => d.value > 0)
             ? <BarChart data={dailyRevenue} height={isMobile ? 170 : 200} color={DR} minBarWidth={dailyRevenue.length > 8 ? 34 : 0} />
             : <Empty />}
         </ChartCard>

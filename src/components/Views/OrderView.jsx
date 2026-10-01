@@ -24,9 +24,9 @@ const PENDING_COLOR = "#D97706";
 
 // Desktop table columns. Columns from CENTER_FROM_INDEX onward (Items,
 // Total, Discount, Payment, Status, Actions) are center-aligned; everything
-// before that (Order ID, Date & Time, Type, and the customer-info columns)
-// reads left-aligned like ordinary text.
-const TABLE_HEADERS = ["Order ID", "Date & Time", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
+// before that (Order ID, Date & Time, Paid On, Type, and the customer-info
+// columns) reads left-aligned like ordinary text.
+const TABLE_HEADERS = ["Order ID", "Date & Time", "Paid On", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
 const CENTER_FROM_INDEX = TABLE_HEADERS.indexOf("Items");
 
 // ── Date-range (sales period) filter options ──────────────
@@ -53,6 +53,19 @@ const fmtDateTime = (iso) => {
     .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
     .replace(/\s/g, ""); // strips normal and narrow no-break spaces → "11:13PM"
   return `${date} ${time}`;
+};
+
+// Text shown under "Paid On".
+//  - has paid_at          → the exact date & time it was paid
+//  - completed, no paid_at → old order from before this column existed;
+//                            fall back to created_at
+//  - pending              → "Unpaid"
+//  - voided / refunded    → "—"
+const paidLabel = (o) => {
+  if (o.paid_at) return fmtDateTime(o.paid_at);
+  if (o.status === "completed") return fmtDateTime(o.created_at);
+  if (o.status === "pending") return "Unpaid";
+  return "—";
 };
 
 // Returns { start, end } (end exclusive) for a given filter key, or null
@@ -308,6 +321,7 @@ export default function OrdersView({ orders, setOrders }) {
             <span>${time}</span>
           </div>
           <div class="order-meta">${o.type} · ${o.payment_method?.toUpperCase() || "—"} · ${o.status.toUpperCase()}</div>
+          <div class="order-meta">Paid: ${paidLabel(o)}</div>
           ${customerHtml ? `<div class="customer">${customerHtml}</div>` : ""}
           <table class="items">
             <tbody>${itemsHtml}</tbody>
@@ -388,6 +402,7 @@ export default function OrdersView({ orders, setOrders }) {
   };
 
   // ── Complete a pending order ───────────────────────────
+  // Also records the exact date & time the order was paid (paid_at).
   const completeOrder = (order) => {
     showConfirm({
       title:        "Complete Order",
@@ -396,13 +411,14 @@ export default function OrdersView({ orders, setOrders }) {
       danger:       false,
       onConfirm:    async () => {
         try {
+          const paidAt = new Date().toISOString();
           const { error } = await supabase
             .from("orders")
-            .update({ status: "completed" })
+            .update({ status: "completed", paid_at: paidAt })
             .eq("id", order.id);
           if (error) throw new Error(error.message);
           updateOrders(prev => prev.map(o =>
-            o.id === order.id ? { ...o, status: "completed" } : o
+            o.id === order.id ? { ...o, status: "completed", paid_at: paidAt } : o
           ));
           closeConfirm();
           showSuccess("Order Completed", `Order ${order.id} is now completed.`);
@@ -676,6 +692,11 @@ export default function OrdersView({ orders, setOrders }) {
                     {" · "}<span style={{ textTransform: "uppercase", fontWeight: 700 }}>{order.payment_method}</span>
                   </div>
 
+                  {/* Paid date & time */}
+                  <div style={{ fontSize: 12, color: order.status === "pending" ? PENDING_COLOR : MUTED, marginTop: 2, fontWeight: order.status === "pending" ? 700 : 400 }}>
+                    Paid: {paidLabel(order)}
+                  </div>
+
                   {/* Customer info line — name, contact, delivery address */}
                   {(order.customer_name || order.contact_number || order.delivery_address) && (
                     <div style={{ fontSize: 12, color: TEXT, marginTop: 4, lineHeight: 1.5 }}>
@@ -815,6 +836,15 @@ export default function OrdersView({ orders, setOrders }) {
                       {/* Date & Time */}
                       <td style={{ padding: "10px 14px", color: MUTED, whiteSpace: "nowrap" }}>
                         {fmtDateTime(order.created_at)}
+                      </td>
+
+                      {/* Paid On */}
+                      <td style={{
+                        padding: "10px 14px", whiteSpace: "nowrap",
+                        color: order.status === "pending" ? PENDING_COLOR : MUTED,
+                        fontWeight: order.status === "pending" ? 700 : 400,
+                      }}>
+                        {paidLabel(order)}
                       </td>
 
                       {/* Type */}

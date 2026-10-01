@@ -14,6 +14,8 @@ import useIsMobile, { noZoomFont, SAFE_BOTTOM } from "../../function/useIsMobile
   app (used only to compute the sales-side KPI cards). This
   view manages its own "expenses" fetch, realtime sync, and
   full create / read / update / delete.
+
+  The expense list is filtered by YEAR + MONTH (January–December).
 ───────────────────────────────────────────────────────── */
 
 // ── Status meta ──────────────────────────────────────────
@@ -30,6 +32,11 @@ const CATEGORY_OPTIONS = [
 ];
 
 const PAYMENT_METHODS = ["Cash", "GCash", "Bank Transfer", "Card", "Other"];
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 
 const todayISO = () => {
   const d = new Date();
@@ -81,6 +88,26 @@ const isSameMonth = (date, ref) => {
   if (isNaN(d.getTime())) return false;
   return d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear();
 };
+
+// Expense dates are stored as "YYYY-MM-DD". Parse the string directly
+// (instead of new Date(str), which treats it as UTC) so an expense on
+// e.g. March 1 never slips into February because of timezones.
+function getYearMonth(dateStr) {
+  if (!dateStr) return null;
+  const m = /^(\d{4})-(\d{2})/.exec(String(dateStr));
+  if (m) return { year: Number(m[1]), month: Number(m[2]) - 1 };
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  return { year: d.getFullYear(), month: d.getMonth() };
+}
+
+// Display an expense date without timezone drift.
+function formatExpenseDate(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ""));
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(dateStr);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" });
+}
 
 // ── Small KPI card ───────────────────────────────────────
 function KpiCard({ label, value, sub, color = TEXT, isMobile }) {
@@ -167,7 +194,12 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [range, setRange] = useState("30d");
+
+  // ── Period filter: year + month (January–December) ─────
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth();
+  const [selectedYear, setSelectedYear] = useState(currentYear);     // number | "all"
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth);  // 0–11 | "all"
 
   const [formModal, setFormModal] = useState(null); // { mode: "add"|"edit", data }
   const [form, setForm] = useState(EMPTY_FORM);
@@ -272,33 +304,46 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
   }, [orders, expenses]);
 
   // ══════════════════════════════════════════════════════
+  // YEAR OPTIONS — every year that has expenses, plus the
+  // current year, newest first.
+  // ══════════════════════════════════════════════════════
+  const yearOptions = useMemo(() => {
+    const set = new Set([currentYear]);
+    expenses.forEach((e) => {
+      const ym = getYearMonth(e.date);
+      if (ym) set.add(ym.year);
+    });
+    return Array.from(set).sort((a, b) => b - a);
+  }, [expenses, currentYear]);
+
+  // ══════════════════════════════════════════════════════
   // FILTERED LIST (for the table / card list, not the KPIs)
   // ══════════════════════════════════════════════════════
   const visible = useMemo(() => {
-    const daysMap = { today: 1, "7d": 7, "30d": 30, month: null, all: null };
-    let cutoff = null;
-    if (range === "month") {
-      cutoff = new Date(now.getFullYear(), now.getMonth(), 1);
-    } else if (range !== "all") {
-      const d = daysMap[range] || 30;
-      cutoff = new Date(now);
-      cutoff.setDate(cutoff.getDate() - (d - 1));
-      cutoff.setHours(0, 0, 0, 0);
-    }
+    const q = search.toLowerCase();
+    return expenses.filter((e) => {
+      const matchStatus = statusFilter === "all" || e.status === statusFilter;
+      const matchSearch = !q ||
+        (e.description || "").toLowerCase().includes(q) ||
+        (e.category || "").toLowerCase().includes(q);
 
-    return expenses
-      .filter((e) => {
-        const matchStatus = statusFilter === "all" || e.status === statusFilter;
-        const q = search.toLowerCase();
-        const matchSearch = !q ||
-          (e.description || "").toLowerCase().includes(q) ||
-          (e.category || "").toLowerCase().includes(q);
-        const matchRange = !cutoff || new Date(e.date) >= cutoff;
-        return matchStatus && matchSearch && matchRange;
-      });
-  }, [expenses, statusFilter, search, range]);
+      const ym = getYearMonth(e.date);
+      const matchYear = selectedYear === "all" || (ym && ym.year === selectedYear);
+      const matchMonth = selectedMonth === "all" || (ym && ym.month === selectedMonth);
+
+      return matchStatus && matchSearch && matchYear && matchMonth;
+    });
+  }, [expenses, statusFilter, search, selectedYear, selectedMonth]);
 
   const totalVisible = visible.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+  // Human-readable label for the active period, e.g. "March 2026"
+  const periodLabel = useMemo(() => {
+    if (selectedMonth === "all" && selectedYear === "all") return "All Time";
+    if (selectedMonth === "all") return `${selectedYear}`;
+    if (selectedYear === "all") return `${MONTHS[selectedMonth]} (all years)`;
+    return `${MONTHS[selectedMonth]} ${selectedYear}`;
+  }, [selectedMonth, selectedYear]);
 
   // ══════════════════════════════════════════════════════
   // CRUD
@@ -417,13 +462,14 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
     fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : "8px 10px",
   };
 
-  const ranges = [
-    { key: "today", label: "Today" },
-    { key: "7d", label: "7 Days" },
-    { key: "30d", label: "30 Days" },
-    { key: "month", label: "This Month" },
-    { key: "all", label: "All Time" },
-  ];
+  const monthBtn = (active) => ({
+    padding: isMobile ? "10px 14px" : "7px 12px",
+    borderRadius: 6, border: "none", cursor: "pointer",
+    fontFamily: FONT, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
+    background: active ? TEXT : SUBTLE,
+    color: active ? "#fff" : MUTED,
+    touchAction: "manipulation",
+  });
 
   if ((loading && expenses.length === 0) || ownOrders === null) {
     return (
@@ -499,10 +545,11 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
           sub={kpis.netProfitThisMonth >= 0 ? "Sales − Expenses" : "Running a loss"} />
       </div>
 
-      {/* ── Filters ────────────────────────────────────────── */}
+      {/* ── Filters: search + status + year ─────────────────── */}
       <div style={{
         display: "flex", flexDirection: isMobile ? "column" : "row",
-        gap: 10, marginBottom: 12, flexWrap: "wrap", flexShrink: 0,
+        gap: 10, marginBottom: 10, flexWrap: "wrap", flexShrink: 0,
+        alignItems: isMobile ? "stretch" : "center",
       }}>
         <input
           value={search}
@@ -525,23 +572,57 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: isMobile ? "nowrap" : "wrap", overflowX: isMobile ? "auto" : "visible", WebkitOverflowScrolling: "touch", marginLeft: isMobile ? 0 : "auto" }}>
-          {ranges.map((r) => (
-            <button key={r.key} onClick={() => setRange(r.key)}
-              style={{
-                padding: isMobile ? "10px 14px" : "7px 12px", borderRadius: 6, border: "none", cursor: "pointer",
-                fontFamily: FONT, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0,
-                background: range === r.key ? TEXT : SUBTLE,
-                color: range === r.key ? "#fff" : MUTED,
-              }}>
-              {r.label}
-            </button>
-          ))}
+
+        {/* Year selector */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: isMobile ? 0 : "auto" }}>
+          <label htmlFor="expense-year" style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Year
+          </label>
+          <select
+            id="expense-year"
+            value={selectedYear}
+            onChange={(e) => setSelectedYear(e.target.value === "all" ? "all" : Number(e.target.value))}
+            style={{
+              ...inputStyle,
+              boxSizing: "border-box",
+              fontSize: noZoomFont(isMobile),
+              padding: isMobile ? "10px 12px" : "7px 10px",
+              fontWeight: 700,
+              cursor: "pointer",
+              flex: isMobile ? 1 : "none",
+              minWidth: 110,
+            }}
+          >
+            <option value="all">All Years</option>
+            {yearOptions.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
         </div>
       </div>
 
+      {/* ── Month picker: January → December ────────────────── */}
+      <div style={{
+        display: "flex", gap: 6,
+        flexWrap: isMobile ? "nowrap" : "wrap",
+        overflowX: isMobile ? "auto" : "visible",
+        WebkitOverflowScrolling: "touch",
+        marginBottom: 12, flexShrink: 0,
+        paddingBottom: isMobile ? 2 : 0,
+      }}>
+        <button onClick={() => setSelectedMonth("all")} style={monthBtn(selectedMonth === "all")}>
+          All Months
+        </button>
+        {MONTHS.map((m, i) => (
+          <button key={m} onClick={() => setSelectedMonth(i)} style={monthBtn(selectedMonth === i)}>
+            {isMobile ? m.slice(0, 3) : m}
+          </button>
+        ))}
+      </div>
+
       <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, flexShrink: 0 }}>
-        Showing <strong style={{ color: TEXT }}>{visible.length}</strong> expense{visible.length !== 1 ? "s" : ""} · Total{" "}
+        <strong style={{ color: TEXT }}>{periodLabel}</strong>
+        {" · "}Showing <strong style={{ color: TEXT }}>{visible.length}</strong> expense{visible.length !== 1 ? "s" : ""} · Total{" "}
         <strong style={{ color: DR }}>{fmt(totalVisible)}</strong>
       </div>
 
@@ -559,7 +640,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
                   <StatusPill status={e.status} />
                 </div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
-                  {new Date(e.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                  {formatExpenseDate(e.date)}
                   {" · "}<span style={{ textTransform: "uppercase", fontWeight: 700 }}>{e.payment_method}</span>
                 </div>
                 <div style={{ fontSize: 20, fontWeight: 800, color: DR, marginTop: 8 }}>{fmt(e.amount)}</div>
@@ -576,7 +657,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
           </div>
           {visible.length === 0 && (
             <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14, border: `1px solid ${BORDER}`, borderRadius: 10 }}>
-              No expenses found
+              No expenses found for {periodLabel}
             </div>
           )}
         </div>
@@ -603,7 +684,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
                       onMouseEnter={(ev) => (ev.currentTarget.style.background = DR_LIGHT)}
                       onMouseLeave={(ev) => (ev.currentTarget.style.background = rowBg)}>
                       <td style={{ padding: "10px 14px", whiteSpace: "nowrap", color: MUTED }}>
-                        {new Date(e.date).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })}
+                        {formatExpenseDate(e.date)}
                       </td>
                       <td style={{ padding: "10px 14px", fontWeight: 700 }}>{e.category}</td>
                       <td style={{ padding: "10px 14px", maxWidth: 260 }}>
@@ -628,7 +709,9 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
               </tbody>
             </table>
             {visible.length === 0 && (
-              <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14 }}>No expenses found</div>
+              <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14 }}>
+                No expenses found for {periodLabel}
+              </div>
             )}
           </div>
         </div>
