@@ -163,18 +163,43 @@ export default function App() {
     { key: "calendar", emoji: "📅", label: "Calendar" },
   ];
 
-  // Completed sales for today
-  const todaySales = orders
-    ? orders
-      .filter(o => o.status === "completed" && new Date(o.created_at).toDateString() === clock.toDateString())
-      .reduce((s, o) => s + o.total, 0)
-    : 0;
+  // ── Sales / pending computations ──
+  const allOrders = orders || [];
 
-  // Pending orders: money still outstanding (all dates, since a pending
-  // order stays pending until it's completed or voided)
-  const pendingOrders = orders ? orders.filter(o => o.status === "pending") : [];
-  const pendingTotal  = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const startOfToday = new Date(clock);
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const isToday = (d) => !!d && new Date(d).toDateString() === clock.toDateString();
+
+  // Date kung kailan binayaran ang order (adjust kung ibang column name ang gamit mo)
+  const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
+
+  // Today's sales: completed orders na ginawa today
+  const todaySales = allOrders
+    .filter(o => o.status === "completed" && isToday(o.created_at))
+    .reduce((s, o) => s + (o.total || 0), 0);
+
+  // Past pending: pending pa rin, ginawa BEFORE today
+  const pastPendingOrders = allOrders.filter(
+    o => o.status === "pending" && new Date(o.created_at) < startOfToday
+  );
+  const pastPendingTotal = pastPendingOrders.reduce((s, o) => s + (o.total || 0), 0);
+
+  // All pending (para sa topbar)
+  const pendingOrders = allOrders.filter(o => o.status === "pending");
+  const pendingTotal = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
+
+  // Paid pendings today: ginawa nung nakaraang araw, binayaran today
+  const paidPendingsToday = allOrders.filter(
+    o => o.status === "completed" && !isToday(o.created_at) && isToday(paidDate(o))
+  );
+  const paidPendingsTotal = paidPendingsToday.reduce((s, o) => s + (o.total || 0), 0);
+
+  // Grand total = today's sales + paid pendings today
+  const grandTotal = todaySales + paidPendingsTotal;
+
   const PENDING_COLOR = "#FCD34D";
+  const PAID_COLOR = "#86EFAC";
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
@@ -192,6 +217,7 @@ export default function App() {
           display: flex;
           flex-direction: column;
           flex-shrink: 0;
+          min-height: 0;
         }
 
         .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
@@ -285,7 +311,7 @@ export default function App() {
             <button className="sidebar-close-btn" onClick={() => setMobileNavOpen(false)} aria-label="Close menu">✕</button>
           </div>
 
-          <nav style={{ flex: 1, padding: "8px 0", overflowY: "auto" }}>
+          <nav style={{ flex: 1, padding: "8px 0", overflowY: "auto", minHeight: 0 }}>
             {navItems.map(({ key, emoji, label }) => {
               const active = view === key;
               return (
@@ -302,11 +328,31 @@ export default function App() {
             })}
           </nav>
 
-          <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)" }}>
-            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 4 }}>Today's Sales</div>
-            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>{fmt(todaySales)}</div>
+          <div style={{ padding: "14px 18px", borderTop: "1px solid rgba(255,255,255,0.12)", overflowY: "auto", flexShrink: 0, maxHeight: "60%" }}>
+            {/* Today's Sales */}
+            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 2 }}>Today's Sales</div>
+            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 8 }}>{fmt(todaySales)}</div>
 
-            {/* Pending total — click to jump to the Orders page */}
+            {/* Paid pendings today */}
+            <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 2 }}>
+              Paid Pendings Today ({paidPendingsToday.length})
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: PAID_COLOR, marginBottom: 8 }}>
+              {fmt(paidPendingsTotal)}
+            </div>
+
+            {/* Grand total */}
+            <div style={{
+              padding: "8px 10px", marginBottom: 8,
+              background: "rgba(255,255,255,0.18)",
+              border: "1px solid rgba(255,255,255,0.35)",
+              borderRadius: 7,
+            }}>
+              <div style={{ fontSize: 11, opacity: 0.85, marginBottom: 2 }}>Grand Total Today</div>
+              <div style={{ fontSize: 20, fontWeight: 800 }}>{fmt(grandTotal)}</div>
+            </div>
+
+            {/* Past pending — click para pumunta sa Orders */}
             <button
               onClick={() => handleSetView("orders")}
               title="View orders"
@@ -319,10 +365,10 @@ export default function App() {
               }}
             >
               <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 2 }}>
-                Pending ({pendingOrders.length})
+                Past Pending ({pastPendingOrders.length})
               </div>
               <div style={{ fontSize: 16, fontWeight: 800, color: PENDING_COLOR }}>
-                {fmt(pendingTotal)}
+                {fmt(pastPendingTotal)}
               </div>
             </button>
 
@@ -359,7 +405,7 @@ export default function App() {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, color: MUTED, flexShrink: 0 }}>
-              <span className="topbar-orders-label">{orders ? orders.length : 0} orders today</span>
+              <span className="topbar-orders-label">{allOrders.length} orders today</span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span className="topbar-orders-label" style={{ fontWeight: 700, color: "#92400E" }}>
                 Pending: {fmt(pendingTotal)}
