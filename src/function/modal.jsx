@@ -6,6 +6,10 @@ import Field from "./field";
 import { useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 
+// Local id helper (was referenced below but never defined/imported, which
+// threw a ReferenceError on GCash payments without a reference number).
+const genId = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+
 export default function Modal({ title, onClose, children, width = 480 }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.48)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
@@ -40,6 +44,11 @@ export function ReceiptModal({ order, onClose }) {
   // rider-slip payload above, even if both were somehow printed together.
   const isPayLater = order.payment_method === "pay_later";
   const payLaterPayload = `PAYLATER-CONFIRM:${order.id}`;
+
+  // Paid/unpaid depends on the PAYMENT, never on the delivery status.
+  // A Pickup & Delivery order paid by Cash/GCash is PAID even though its
+  // status stays "pending" until the rider delivers it.
+  const isPaid = !isPayLater;
 
   return (
     <Modal title="Receipt" onClose={onClose} width={380}>
@@ -82,7 +91,7 @@ export function ReceiptModal({ order, onClose }) {
 
         <div style={{ fontSize: 12, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
           <span><b>Order:</b> {order.id}</span>
-          <span style={{ textTransform: "capitalize" }}>{order.type}</span>
+          <span style={{ textTransform: "capitalize" }}>{(order.type || "").replace(/_/g, " ")}</span>
         </div>
         {order.customer_name && <div style={{ fontSize: 12, marginBottom: 4 }}><b>Customer:</b> {order.customer_name}</div>}
         {order.table_no && <div style={{ fontSize: 12, marginBottom: 4 }}><b>Table:</b> {order.table_no}</div>}
@@ -120,6 +129,14 @@ export function ReceiptModal({ order, onClose }) {
           </div>
           {isPayLater && (
             <div style={{ color: DR, fontWeight: 700, marginTop: 2 }}>⚠ UNPAID — Pending payment</div>
+          )}
+          {isPaid && (
+            <div style={{ color: SUCCESS, fontWeight: 700, marginTop: 2 }}>
+              ✓ PAID{order.paid_at ? ` — ${new Date(order.paid_at).toLocaleString("en-PH")}` : ""}
+            </div>
+          )}
+          {isPaid && isPickupDelivery && order.status === "pending" && (
+            <div style={{ marginTop: 2 }}>Awaiting delivery</div>
           )}
           {order.payment_ref && <div>Ref No: {order.payment_ref}</div>}
         </div>
@@ -172,16 +189,14 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
   const cash = parseFloat(cashGiven) || 0;
   const change = method === "cash" ? Math.max(0, cash - total) : 0;
 
-  // Pickup & Delivery orders are paid to the rider on delivery, not at the
-  // counter — so there's no cash-in-hand to count or change to give here.
-  const isPickupDelivery = orderType === "pickup_delivery";
-
   // GCash is always selectable (manual reference entry). Card was removed.
   const isPayLater = method === "pay_later";
 
   const handlePay = async () => {
-    if (method === "cash" && !isPickupDelivery && cash < total) { setError("Cash given is less than total amount."); return; }
-    if (method !== "cash" && !ref && demoMode) { /* allow demo without ref */ }
+    // Cash is collected at the counter for EVERY order type (including
+    // Pickup & Delivery), so the order is recorded as paid right now.
+    if (method === "cash" && cash < total) { setError("Cash given is less than total amount."); return; }
+    if (method === "gcash" && !ref.trim() && !demoMode) { setError("GCash reference number is required."); return; }
     setLoading(true); setError("");
     try {
       // Pay Later: no PayMongo call, no cash to record — the order is
@@ -191,7 +206,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
         return;
       }
 
-      let payRef = ref;
+      let payRef = ref.trim();
       if (!demoMode && config?.paymongoKey && method === "gcash") {
         const pm = await pmReq(config, "payment_intents", {
           data: {
@@ -261,16 +276,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
           </div>
         )}
 
-        {method === "cash" && isPickupDelivery && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 8, marginBottom: 18, padding: "12px 16px",
-            background: SUBTLE, borderRadius: 8, fontSize: 13, color: MUTED,
-          }}>
-            🛵 Cash will be collected by the rider on delivery — no amount needed here.
-          </div>
-        )}
-
-        {method === "cash" && !isPickupDelivery && (
+        {method === "cash" && (
           <>
             <Field label="Cash Given">
               <input type="number" min="0" step="0.01" value={cashGiven} onChange={e => setCashGiven(e.target.value)}
@@ -299,7 +305,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
 
         <div style={{ display: "flex", gap: 10 }}>
           <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }} disabled={loading}>Cancel</Btn>
-          <Btn onClick={handlePay} style={{ flex: 2 }} disabled={loading || (method === "cash" && !isPickupDelivery && cash < total && !!cashGiven)}>
+          <Btn onClick={handlePay} style={{ flex: 2 }} disabled={loading || (method === "cash" && cash < total)}>
             {loading ? "Processing…" : isPayLater ? "Confirm Pay Later" : `Confirm ${method === "cash" ? "Cash" : method.toUpperCase()} Payment`}
           </Btn>
         </div>

@@ -688,6 +688,11 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     if (order.status === "completed") {
       showToast(`Order ${orderId} is already marked delivered.`, "warn"); return;
     }
+    // A Pay Later order that hasn't been settled can't be closed out by
+    // delivery alone — otherwise it would read "completed" while unpaid.
+    if (order.payment_method === "pay_later" && !order.paid_at) {
+      showToast(`Order ${orderId} is still unpaid (Pay Later). Confirm payment first.`, "err"); return;
+    }
 
     // .select() forces Supabase to return the rows it actually touched.
     // Without it, `error` is null even when RLS silently blocks the write or
@@ -710,8 +715,9 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   };
 
   /* Scan a receipt's "Pay Later" QR to confirm the customer has now paid.
-     Flips a pending pay-later order to "completed" — same local-first,
-     then-persist pattern as completeRiderOrder above. */
+     Flips a pending pay-later order to "completed" and stamps paid_at with
+     the moment of the scan — same local-first, then-persist pattern as
+     completeRiderOrder above. */
   const completePayLaterOrder = async (decodedText) => {
     setModal(null);
     const orderId = parsePayLaterOrderId(decodedText);
@@ -731,7 +737,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     // here instead of a false "success".
     const { data, error } = await supabase
       .from("orders")
-      .update({ status: "completed" })
+      .update({ status: "completed", paid_at: ts() })
       .eq("id", orderId)
       .select();
 
@@ -853,6 +859,10 @@ export default function POSView({ categories, items, setItems, orders, setOrders
        2. Otherwise, Pickup & Delivery orders stay "pending" until a rider
           scans the slip as delivered.
        3. Otherwise (a normal, already-paid Walk-in order) -> "completed".
+
+     paid_at is separate from status: Cash/GCash are paid RIGHT NOW (even for
+     Pickup & Delivery, whose status stays "pending" until delivery), while
+     Pay Later has no paid_at until it's settled later.
   */
   const handlePaid = async (method, ref) => {
     setLoading(true); setError("");
@@ -864,13 +874,16 @@ export default function POSView({ categories, items, setItems, orders, setOrders
             ? "pending"
             : "completed";
 
+      const createdAt = ts();
+
       const order = {
         id: genId(), type: orderType, customer_name: customerName,
         contact_number: formatContactForSave(contactNumber),
         table_no: tableNo, delivery_address: deliveryAddr,
         items: cart.map(c => ({ id: c.id, name: c.name, price: c.price, qty: c.qty })),
         subtotal, discount: discAmt, total, status,
-        payment_method: method, payment_ref: ref, created_at: ts(),
+        payment_method: method, payment_ref: ref, created_at: createdAt,
+        paid_at: method === "pay_later" ? null : createdAt,
         discount_type: discountType,
         discount_info: discountType === "promo" && promo
           ? { code: promo.code, label: promo.label }

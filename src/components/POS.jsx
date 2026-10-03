@@ -163,41 +163,57 @@ export default function App() {
 
   const allOrders = orders || [];
 
-  const startOfToday = new Date(clock);
-  startOfToday.setHours(0, 0, 0, 0);
-
   const isToday = (d) => !!d && new Date(d).toDateString() === clock.toDateString();
 
-  const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
+  // ── Paid vs. unpaid is decided by the PAYMENT, not by status ──
+  // A Pickup & Delivery order paid by Cash/GCash is PAID even while its status
+  // is still "pending" (awaiting delivery). Only Pay Later orders without a
+  // paid_at are unpaid.
+  const isPaid = (o) =>
+    o.payment_method !== "pay_later" || !!o.paid_at || o.status === "completed";
 
-  const todayCompleted = allOrders.filter(
+  // When the money actually came in: Cash/GCash = at creation,
+  // Pay Later = when it was settled.
+  const paidDate = (o) =>
+    o.paid_at ||
+    (o.payment_method === "pay_later"
+      ? (o.completed_at || o.updated_at)
+      : o.created_at);
+
+  // Everything paid today (delivered, or still awaiting delivery).
+  const paidToday = allOrders.filter(
+    o => (o.status === "completed" || o.status === "pending") &&
+         isPaid(o) && isToday(paidDate(o))
+  );
+
+  // Paid pendings = paid today AND (still awaiting delivery OR placed on an earlier day).
+  const paidPendingsToday = paidToday.filter(
+    o => o.status === "pending" || !isToday(o.created_at)
+  );
+  const paidPendingsTotal = paidPendingsToday.reduce((s, o) => s + (o.total || 0), 0);
+
+  // Today's sales = paid today, completed, and placed today.
+  const todayCompleted = paidToday.filter(
     o => o.status === "completed" && isToday(o.created_at)
   );
   const todaySales = todayCompleted.reduce((s, o) => s + (o.total || 0), 0);
 
-  const pendingTodayOrders = allOrders.filter(
-    o => o.status === "pending" && isToday(o.created_at)
-  );
+  // Pending (UNPAID) = still pending AND not paid yet (Pay Later).
+  const unpaidPending = allOrders.filter(o => o.status === "pending" && !isPaid(o));
+  const pendingTodayOrders = unpaidPending.filter(o => isToday(o.created_at));
   const pendingTodayTotal = pendingTodayOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const pendingTotal = unpaidPending.reduce((s, o) => s + (o.total || 0), 0);
 
-  const pendingOrders = allOrders.filter(o => o.status === "pending");
-  const pendingTotal = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
-
-  const paidPendingsToday = allOrders.filter(
-    o => o.status === "completed" && !isToday(o.created_at) && isToday(paidDate(o))
-  );
-  const paidPendingsTotal = paidPendingsToday.reduce((s, o) => s + (o.total || 0), 0);
-
+  // No double counting: todaySales + paidPendingsTotal = everything paid today.
   const grandTotal = todaySales + paidPendingsTotal;
 
-  // GCash breakdown (today's completed sales + pendings paid today).
-  // Adjust the field names below if your orders use a different column.
+  // GCash breakdown (everything paid today).
   const isGcash = (o) =>
     String(o.payment_method || o.paymentMethod || o.payment || "")
       .toLowerCase()
       .includes("gcash");
 
-  const gcashOrdersToday = [...todayCompleted, ...paidPendingsToday].filter(isGcash);
+  const gcashOrdersToday = paidToday.filter(isGcash);
   const gcashTotal = gcashOrdersToday.reduce((s, o) => s + (o.total || 0), 0);
 
   const PENDING_COLOR = "#FCD34D";
@@ -415,7 +431,7 @@ export default function App() {
                 cursor: "pointer",
               }}
             >
-              <span style={{ fontSize: 10, opacity: 0.8 }}>Pending ({pendingTodayOrders.length})</span>
+              <span style={{ fontSize: 10, opacity: 0.8 }}>Unpaid Pending ({pendingTodayOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(pendingTodayTotal)}</span>
             </div>
 
@@ -454,7 +470,7 @@ export default function App() {
               <span className="topbar-orders-label">{allOrders.length} orders today</span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span className="topbar-orders-label" style={{ fontWeight: 700, color: "#92400E" }}>
-                Pending: {fmt(pendingTotal)}
+                Unpaid: {fmt(pendingTotal)}
               </span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span style={{ fontWeight: 700, color: demoMode ? "#92400E" : SUCCESS }}>{demoMode ? "Live Mode" : "Live"}</span>
@@ -462,7 +478,7 @@ export default function App() {
           </div>
 
           <div className="content-area" style={{ flex: 1, overflow: "hidden" }}>
-            {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
+            {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} config={config} demoMode={demoMode} />}
             {view === "menu" && <MenuView categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
             {view === "orders" && <OrdersView orders={orders} setOrders={setOrders} />}
             {view === "riderScanner" && <RiderScannerView orders={orders} setOrders={setOrders} />}

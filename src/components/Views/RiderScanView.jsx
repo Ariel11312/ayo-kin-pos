@@ -364,7 +364,7 @@ function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
 }
 
 /* ─────────────────────────────────────────────
-   Confirm Payment Modal — NEW
+   Confirm Payment Modal
    Asks whether a Pay Later order was settled
    in Cash or GCash before marking it paid.
 ───────────────────────────────────────────── */
@@ -460,7 +460,7 @@ export default function RiderScannerView({ orders, setOrders }) {
   const [toast, setToast] = useState(null);
   const [busyId, setBusyId] = useState(null);
 
-  // NEW: which Pay Later order is being confirmed (Cash vs GCash).
+  // Which Pay Later order is being confirmed (Cash vs GCash).
   const [confirmingPay, setConfirmingPay] = useState(null);
 
   const showToast = (msg, type = "warn") => {
@@ -511,8 +511,8 @@ export default function RiderScannerView({ orders, setOrders }) {
     showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
 
-  // markPaid now accepts an optional { method, ref } from the confirm modal.
-  // If not given, it behaves exactly like before (status-only update).
+  // markPaid accepts { method, ref } from the confirm modal.
+  // paid_at is stamped with the exact moment the cashier confirms Cash/GCash.
   const markPaid = async (orderId, choice = null) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
@@ -523,12 +523,11 @@ export default function RiderScannerView({ orders, setOrders }) {
 
     setBusyId(orderId);
 
-    // When the confirm modal supplied a method, persist it alongside the
-    // status change so the order no longer reads as "pay_later" once paid.
     const updates = { status: "completed" };
     if (choice?.method) {
       updates.payment_method = choice.method;      // "cash" | "gcash"
       updates.payment_ref = choice.ref || null;    // GCash ref when applicable
+      updates.paid_at = new Date().toISOString();  // date/time the payment was confirmed
     }
 
     const { data, error } = await supabase
