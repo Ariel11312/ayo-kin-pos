@@ -56,15 +56,16 @@ const fmtDateTime = (iso) => {
 };
 
 // Text shown under "Paid On".
-//  - has paid_at          → the exact date & time it was paid
+//  - pending               → "Unpaid" (checked FIRST, even if paid_at has a
+//                            value, e.g. from a DB default or the POS saving it early)
+//  - has paid_at           → the exact date & time it was paid
 //  - completed, no paid_at → old order from before this column existed;
 //                            fall back to created_at
-//  - pending              → "Unpaid"
-//  - voided / refunded    → "—"
+//  - voided / refunded     → "—"
 const paidLabel = (o) => {
+  if (o.status === "pending") return "Unpaid";
   if (o.paid_at) return fmtDateTime(o.paid_at);
   if (o.status === "completed") return fmtDateTime(o.created_at);
-  if (o.status === "pending") return "Unpaid";
   return "—";
 };
 

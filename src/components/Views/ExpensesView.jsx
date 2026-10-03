@@ -16,6 +16,12 @@ import useIsMobile, { noZoomFont, SAFE_BOTTOM } from "../../function/useIsMobile
   full create / read / update / delete.
 
   The expense list is filtered by YEAR + MONTH (January–December).
+
+  SCROLLING: the whole page (header, KPI cards, filters, list)
+  scrolls together inside this component's own container. The
+  container fills its parent (height: 100%) instead of using
+  100vh, so it fits correctly under the top bar even on short
+  screens.
 ───────────────────────────────────────────────────────── */
 
 // ── Status meta ──────────────────────────────────────────
@@ -487,20 +493,27 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
   }
 
   return (
+    // The WHOLE page scrolls inside this container. It fills its parent
+    // (height: 100%) rather than using 100vh, so it sits correctly under
+    // the top bar and never gets cut off on short screens.
     <div style={{
       padding: isMobile ? 14 : 22,
-      height: isMobile ? "100dvh" : "100vh",
-      boxSizing: "border-box", display: "flex", flexDirection: "column",
-      overflow: "hidden", fontFamily: FONT,
+      height: "100%",
+      boxSizing: "border-box",
+      overflowY: "auto",
+      overflowX: "hidden",
+      WebkitOverflowScrolling: "touch",
+      overscrollBehavior: "contain",
+      fontFamily: FONT,
     }}>
 
       {ordersError && (
-        <div style={{ background: "#FDECEA", color: "#C0392B", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12, flexShrink: 0 }}>
+        <div style={{ background: "#FDECEA", color: "#C0392B", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
           ⚠ Couldn't load orders for KPI cards: {ordersError}
         </div>
       )}
       {!ordersError && ownOrders !== null && ownOrders.length === 0 && (
-        <div style={{ background: "#FEF3CD", color: "#B7770D", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12, flexShrink: 0 }}>
+        <div style={{ background: "#FEF3CD", color: "#B7770D", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
           ⚠ 0 orders came back from the database for this view, even though the sidebar shows real sales.
           This is a Row Level Security (RLS) policy on the <code>orders</code> table silently filtering out rows
           for the current role — not a bug in this component. Check Supabase → Authentication/Database → Policies → orders.
@@ -511,7 +524,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
       <div style={{
         display: "flex", flexDirection: isMobile ? "column" : "row",
         justifyContent: "space-between", alignItems: isMobile ? "stretch" : "flex-start",
-        gap: 12, marginBottom: isMobile ? 14 : 18, flexShrink: 0,
+        gap: 12, marginBottom: isMobile ? 14 : 18,
       }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Expenses</h2>
@@ -526,7 +539,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
 
       {/* ── KPI Cards ──────────────────────────────────────── */}
       <div style={{
-        flexShrink: 0, marginBottom: isMobile ? 14 : 20,
+        marginBottom: isMobile ? 14 : 20,
         display: "grid",
         gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)",
         gap: isMobile ? 8 : 12,
@@ -548,7 +561,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
       {/* ── Filters: search + status + year ─────────────────── */}
       <div style={{
         display: "flex", flexDirection: isMobile ? "column" : "row",
-        gap: 10, marginBottom: 10, flexWrap: "wrap", flexShrink: 0,
+        gap: 10, marginBottom: 10, flexWrap: "wrap",
         alignItems: isMobile ? "stretch" : "center",
       }}>
         <input
@@ -607,7 +620,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
         flexWrap: isMobile ? "nowrap" : "wrap",
         overflowX: isMobile ? "auto" : "visible",
         WebkitOverflowScrolling: "touch",
-        marginBottom: 12, flexShrink: 0,
+        marginBottom: 12,
         paddingBottom: isMobile ? 2 : 0,
       }}>
         <button onClick={() => setSelectedMonth("all")} style={monthBtn(selectedMonth === "all")}>
@@ -620,7 +633,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
         ))}
       </div>
 
-      <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, flexShrink: 0 }}>
+      <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>
         <strong style={{ color: TEXT }}>{periodLabel}</strong>
         {" · "}Showing <strong style={{ color: TEXT }}>{visible.length}</strong> expense{visible.length !== 1 ? "s" : ""} · Total{" "}
         <strong style={{ color: DR }}>{fmt(totalVisible)}</strong>
@@ -628,7 +641,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
 
       {/* ── List: cards on mobile, table on desktop ─────────── */}
       {isMobile ? (
-        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", paddingBottom: `calc(24px + ${SAFE_BOTTOM})` }}>
+        <div style={{ paddingBottom: `calc(24px + ${SAFE_BOTTOM})` }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {visible.map((e) => (
               <div key={e.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 10, padding: 14, background: BG }}>
@@ -662,58 +675,56 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
           )}
         </div>
       ) : (
-        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflow: "hidden", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          <div style={{ overflowY: "auto", overflowX: "auto", flex: 1, minHeight: 0 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: SUBTLE }}>
-                  {["Date", "Category", "Description", "Payment", "Amount", "Status", "Actions"].map((h, i) => (
-                    <th key={h} style={{
-                      padding: "10px 14px", textAlign: i >= 4 ? "center" : "left",
-                      fontWeight: 700, color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8,
-                      whiteSpace: "nowrap", position: "sticky", top: 0, background: SUBTLE, zIndex: 1,
-                    }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map((e, idx) => {
-                  const rowBg = idx % 2 === 0 ? BG : "#FAFAFA";
-                  return (
-                    <tr key={e.id} style={{ borderTop: `1px solid ${BORDER}`, background: rowBg }}
-                      onMouseEnter={(ev) => (ev.currentTarget.style.background = DR_LIGHT)}
-                      onMouseLeave={(ev) => (ev.currentTarget.style.background = rowBg)}>
-                      <td style={{ padding: "10px 14px", whiteSpace: "nowrap", color: MUTED }}>
-                        {formatExpenseDate(e.date)}
-                      </td>
-                      <td style={{ padding: "10px 14px", fontWeight: 700 }}>{e.category}</td>
-                      <td style={{ padding: "10px 14px", maxWidth: 260 }}>
-                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.description}>{e.description}</div>
-                        {e.notes && <div style={{ fontSize: 11, color: MUTED, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.notes}>{e.notes}</div>}
-                      </td>
-                      <td style={{ padding: "10px 14px", textAlign: "center", textTransform: "uppercase", fontSize: 11, fontWeight: 700 }}>{e.payment_method}</td>
-                      <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, color: DR }}>{fmt(e.amount)}</td>
-                      <td style={{ padding: "10px 14px", textAlign: "center" }}><StatusPill status={e.status} /></td>
-                      <td style={{ padding: "8px 14px", textAlign: "center" }}>
-                        <div style={{ display: "flex", gap: 5, justifyContent: "center", flexWrap: "nowrap" }}>
-                          {e.status !== "paid" && (
-                            <button onClick={() => markPaid(e)} style={actionBtn(SUCCESS, SUCCESS_BG, SUCCESS)}>✓ Paid</button>
-                          )}
-                          <button onClick={() => openEdit(e)} style={actionBtn(BORDER, SUBTLE, TEXT)}>Edit</button>
-                          <button onClick={() => deleteExpense(e)} style={actionBtn(DR, "#FFF5F5", DR)}>Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {visible.length === 0 && (
-              <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14 }}>
-                No expenses found for {periodLabel}
-              </div>
-            )}
-          </div>
+        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 8, overflowX: "auto", overflowY: "hidden", marginBottom: 24 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: SUBTLE }}>
+                {["Date", "Category", "Description", "Payment", "Amount", "Status", "Actions"].map((h, i) => (
+                  <th key={h} style={{
+                    padding: "10px 14px", textAlign: i >= 4 ? "center" : "left",
+                    fontWeight: 700, color: MUTED, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.8,
+                    whiteSpace: "nowrap", background: SUBTLE,
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((e, idx) => {
+                const rowBg = idx % 2 === 0 ? BG : "#FAFAFA";
+                return (
+                  <tr key={e.id} style={{ borderTop: `1px solid ${BORDER}`, background: rowBg }}
+                    onMouseEnter={(ev) => (ev.currentTarget.style.background = DR_LIGHT)}
+                    onMouseLeave={(ev) => (ev.currentTarget.style.background = rowBg)}>
+                    <td style={{ padding: "10px 14px", whiteSpace: "nowrap", color: MUTED }}>
+                      {formatExpenseDate(e.date)}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontWeight: 700 }}>{e.category}</td>
+                    <td style={{ padding: "10px 14px", maxWidth: 260 }}>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.description}>{e.description}</div>
+                      {e.notes && <div style={{ fontSize: 11, color: MUTED, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.notes}>{e.notes}</div>}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "center", textTransform: "uppercase", fontSize: 11, fontWeight: 700 }}>{e.payment_method}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "center", fontWeight: 800, color: DR }}>{fmt(e.amount)}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}><StatusPill status={e.status} /></td>
+                    <td style={{ padding: "8px 14px", textAlign: "center" }}>
+                      <div style={{ display: "flex", gap: 5, justifyContent: "center", flexWrap: "nowrap" }}>
+                        {e.status !== "paid" && (
+                          <button onClick={() => markPaid(e)} style={actionBtn(SUCCESS, SUCCESS_BG, SUCCESS)}>✓ Paid</button>
+                        )}
+                        <button onClick={() => openEdit(e)} style={actionBtn(BORDER, SUBTLE, TEXT)}>Edit</button>
+                        <button onClick={() => deleteExpense(e)} style={actionBtn(DR, "#FFF5F5", DR)}>Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {visible.length === 0 && (
+            <div style={{ textAlign: "center", padding: 48, color: MUTED, fontSize: 14 }}>
+              No expenses found for {periodLabel}
+            </div>
+          )}
         </div>
       )}
 

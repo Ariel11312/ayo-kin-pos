@@ -175,11 +175,24 @@ export default function App() {
   // The moment an order was settled
   const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
 
-  // ── Today's sales: orders created today and already completed ──
+  // ── Payment method helper ─────────────────────────────────────
+  // Adjust the field names below if your orders use a different column.
+  const isGcash = (o) =>
+    String(o.payment_method || o.paymentMethod || o.payment || "")
+      .toLowerCase()
+      .includes("gcash");
+
+  // ── Today's completed orders (created today and already paid) ──
   const todayCompleted = allOrders.filter(
     o => o.status === "completed" && isToday(o.created_at)
   );
-  const todaySales = todayCompleted.reduce((s, o) => s + (o.total || 0), 0);
+
+  // Split into GCash and non-GCash (cash / other)
+  const todayGcashOrders = todayCompleted.filter(isGcash);
+  const todayGcashTotal = todayGcashOrders.reduce((s, o) => s + (o.total || 0), 0);
+
+  const todayCashOrders = todayCompleted.filter(o => !isGcash(o));
+  const todaySales = todayCashOrders.reduce((s, o) => s + (o.total || 0), 0); // non-GCash only
 
   // ── Pending created today ──
   const pendingTodayOrders = allOrders.filter(
@@ -198,7 +211,7 @@ export default function App() {
   const paidCreditsTotal = paidCreditsOrders.reduce((s, o) => s + (o.total || 0), 0);
 
   // Money actually collected today from old orders (created before today, paid today).
-  // Not displayed as its own row, but still counted in Grand Total and GCash.
+  // Not displayed as its own row, but still counted in Grand Total and Total GCash.
   const collectedOldToday = allOrders.filter(
     o =>
       o.status === "completed" &&
@@ -207,16 +220,11 @@ export default function App() {
   );
   const collectedOldTotal = collectedOldToday.reduce((s, o) => s + (o.total || 0), 0);
 
-  const grandTotal = todaySales + collectedOldTotal;
+  // Grand total = everything collected today (cash + GCash, new + old orders)
+  const grandTotal = todaySales + todayGcashTotal + collectedOldTotal;
 
-  // GCash breakdown (today's completed sales + old orders paid today).
-  // Adjust the field names below if your orders use a different column.
-  const isGcash = (o) =>
-    String(o.payment_method || o.paymentMethod || o.payment || "")
-      .toLowerCase()
-      .includes("gcash");
-
-  const gcashOrdersToday = [...todayCompleted, ...collectedOldToday].filter(isGcash);
+  // Total GCash collected today (today's GCash sales + old orders paid via GCash today)
+  const gcashOrdersToday = [...todayGcashOrders, ...collectedOldToday.filter(isGcash)];
   const gcashTotal = gcashOrdersToday.reduce((s, o) => s + (o.total || 0), 0);
 
   // Orders created today (for the top bar label)
@@ -399,9 +407,22 @@ export default function App() {
             padding: "10px 14px 12px",
             borderTop: "1px solid rgba(255,255,255,0.12)",
           }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-              <span style={{ fontSize: 10, opacity: 0.7 }}>Today's Sales</span>
+            {/* Today's Sales — excludes GCash */}
+            <div
+              title="Today's completed sales, not including GCash"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Today's Sales ({todayCashOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800 }}>{fmt(todaySales)}</span>
+            </div>
+
+            {/* Today's GCash — separated from Today's Sales */}
+            <div
+              title="Today's completed GCash sales"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Today's GCash ({todayGcashOrders.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: GCASH_COLOR }}>{fmt(todayGcashTotal)}</span>
             </div>
 
             <div
@@ -412,8 +433,11 @@ export default function App() {
               <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(paidCreditsTotal)}</span>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
-              <span style={{ fontSize: 10, opacity: 0.7 }}>GCash Paid ({gcashOrdersToday.length})</span>
+            <div
+              title="All GCash collected today, including old orders paid today"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Total GCash ({gcashOrdersToday.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: GCASH_COLOR }}>{fmt(gcashTotal)}</span>
             </div>
 
