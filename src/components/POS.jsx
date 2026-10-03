@@ -152,7 +152,7 @@ export default function App() {
     { key: "orders", emoji: "📦", label: "Orders" },
     { key: "riderScanner", emoji: "🛵", label: "Rider Scanner" },
     { key: "stock", emoji: "🗃️", label: "Stock" },
-    { key: "expenses", emoji: "💸", label: "expenses" },
+    { key: "expenses", emoji: "💸", label: "Expenses" },
     { key: "promo", emoji: "🎟️", label: "Promo Codes" },
     { key: "statistics", emoji: "📈", label: "Statistics" },
     { key: "voidRefund", emoji: "↩", label: "Void / Refund" },
@@ -163,58 +163,64 @@ export default function App() {
 
   const allOrders = orders || [];
 
+  // ── Date helpers ──────────────────────────────────────────────
+  const startOfToday = new Date(clock);
+  startOfToday.setHours(0, 0, 0, 0);
+
   const isToday = (d) => !!d && new Date(d).toDateString() === clock.toDateString();
 
-  // ── Paid vs. unpaid is decided by the PAYMENT, not by status ──
-  // A Pickup & Delivery order paid by Cash/GCash is PAID even while its status
-  // is still "pending" (awaiting delivery). Only Pay Later orders without a
-  // paid_at are unpaid.
-  const isPaid = (o) =>
-    o.payment_method !== "pay_later" || !!o.paid_at || o.status === "completed";
+  // Created on a day BEFORE today (i.e. an "old" transaction)
+  const isOlderThanToday = (d) => !!d && new Date(d) < startOfToday;
 
-  // When the money actually came in: Cash/GCash = at creation,
-  // Pay Later = when it was settled.
-  const paidDate = (o) =>
-    o.paid_at ||
-    (o.payment_method === "pay_later"
-      ? (o.completed_at || o.updated_at)
-      : o.created_at);
+  // The moment an order was settled
+  const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
 
-  // Everything paid today (delivered, or still awaiting delivery).
-  const paidToday = allOrders.filter(
-    o => (o.status === "completed" || o.status === "pending") &&
-         isPaid(o) && isToday(paidDate(o))
-  );
-
-  // Paid pendings = paid today AND (still awaiting delivery OR placed on an earlier day).
-  const paidPendingsToday = paidToday.filter(
-    o => o.status === "pending" || !isToday(o.created_at)
-  );
-  const paidPendingsTotal = paidPendingsToday.reduce((s, o) => s + (o.total || 0), 0);
-
-  // Today's sales = paid today, completed, and placed today.
-  const todayCompleted = paidToday.filter(
+  // ── Today's sales: orders created today and already completed ──
+  const todayCompleted = allOrders.filter(
     o => o.status === "completed" && isToday(o.created_at)
   );
   const todaySales = todayCompleted.reduce((s, o) => s + (o.total || 0), 0);
 
-  // Pending (UNPAID) = still pending AND not paid yet (Pay Later).
-  const unpaidPending = allOrders.filter(o => o.status === "pending" && !isPaid(o));
-  const pendingTodayOrders = unpaidPending.filter(o => isToday(o.created_at));
+  // ── Pending created today ──
+  const pendingTodayOrders = allOrders.filter(
+    o => o.status === "pending" && isToday(o.created_at)
+  );
   const pendingTodayTotal = pendingTodayOrders.reduce((s, o) => s + (o.total || 0), 0);
-  const pendingTotal = unpaidPending.reduce((s, o) => s + (o.total || 0), 0);
 
-  // No double counting: todaySales + paidPendingsTotal = everything paid today.
-  const grandTotal = todaySales + paidPendingsTotal;
+  // ── All pending (any date) – shown in the top bar ──
+  const pendingOrders = allOrders.filter(o => o.status === "pending");
+  const pendingTotal = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
 
-  // GCash breakdown (everything paid today).
+  // ── Paid Credits row: ALL pending (unpaid) orders from OLD days (created before today) ──
+  const paidCreditsOrders = allOrders.filter(
+    o => o.status === "pending" && isOlderThanToday(o.created_at)
+  );
+  const paidCreditsTotal = paidCreditsOrders.reduce((s, o) => s + (o.total || 0), 0);
+
+  // Money actually collected today from old orders (created before today, paid today).
+  // Not displayed as its own row, but still counted in Grand Total and GCash.
+  const collectedOldToday = allOrders.filter(
+    o =>
+      o.status === "completed" &&
+      isOlderThanToday(o.created_at) &&
+      isToday(paidDate(o))
+  );
+  const collectedOldTotal = collectedOldToday.reduce((s, o) => s + (o.total || 0), 0);
+
+  const grandTotal = todaySales + collectedOldTotal;
+
+  // GCash breakdown (today's completed sales + old orders paid today).
+  // Adjust the field names below if your orders use a different column.
   const isGcash = (o) =>
     String(o.payment_method || o.paymentMethod || o.payment || "")
       .toLowerCase()
       .includes("gcash");
 
-  const gcashOrdersToday = paidToday.filter(isGcash);
+  const gcashOrdersToday = [...todayCompleted, ...collectedOldToday].filter(isGcash);
   const gcashTotal = gcashOrdersToday.reduce((s, o) => s + (o.total || 0), 0);
+
+  // Orders created today (for the top bar label)
+  const ordersTodayCount = allOrders.filter(o => isToday(o.created_at)).length;
 
   const PENDING_COLOR = "#FCD34D";
   const PAID_COLOR = "#86EFAC";
@@ -398,9 +404,12 @@ export default function App() {
               <span style={{ fontSize: 13, fontWeight: 800 }}>{fmt(todaySales)}</span>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-              <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Pendings ({paidPendingsToday.length})</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: PAID_COLOR }}>{fmt(paidPendingsTotal)}</span>
+            <div
+              title="All pending payments from previous days"
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Credits ({paidCreditsOrders.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(paidCreditsTotal)}</span>
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
@@ -431,7 +440,7 @@ export default function App() {
                 cursor: "pointer",
               }}
             >
-              <span style={{ fontSize: 10, opacity: 0.8 }}>Unpaid Pending ({pendingTodayOrders.length})</span>
+              <span style={{ fontSize: 10, opacity: 0.8 }}>Pending ({pendingTodayOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(pendingTodayTotal)}</span>
             </div>
 
@@ -467,10 +476,10 @@ export default function App() {
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, color: MUTED, flexShrink: 0 }}>
-              <span className="topbar-orders-label">{allOrders.length} orders today</span>
+              <span className="topbar-orders-label">{ordersTodayCount} orders today</span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span className="topbar-orders-label" style={{ fontWeight: 700, color: "#92400E" }}>
-                Unpaid: {fmt(pendingTotal)}
+                Pending: {fmt(pendingTotal)}
               </span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span style={{ fontWeight: 700, color: demoMode ? "#92400E" : SUCCESS }}>{demoMode ? "Live Mode" : "Live"}</span>
@@ -478,7 +487,7 @@ export default function App() {
           </div>
 
           <div className="content-area" style={{ flex: 1, overflow: "hidden" }}>
-            {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} config={config} demoMode={demoMode} />}
+            {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
             {view === "menu" && <MenuView categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
             {view === "orders" && <OrdersView orders={orders} setOrders={setOrders} />}
             {view === "riderScanner" && <RiderScannerView orders={orders} setOrders={setOrders} />}
