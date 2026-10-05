@@ -172,7 +172,10 @@ export default function App() {
   // Created on a day BEFORE today (i.e. an "old" transaction)
   const isOlderThanToday = (d) => !!d && new Date(d) < startOfToday;
 
-  // The moment an order was settled
+  // The moment an order was settled.
+  // NOTE: updated_at is only a last-resort fallback. If your orders table has
+  // paid_at / completed_at, make sure they are filled in when an order is paid,
+  // otherwise editing an old completed order today would count as "collected today".
   const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
 
   // ── Payment method helper ─────────────────────────────────────
@@ -182,50 +185,56 @@ export default function App() {
       .toLowerCase()
       .includes("gcash");
 
-  // ── Today's completed orders (created today and already paid) ──
+  const sumTotal = (list) => list.reduce((s, o) => s + (Number(o.total) || 0), 0);
+
+  // ── 1) Today's completed orders (created today and already paid) ──
   const todayCompleted = allOrders.filter(
     o => o.status === "completed" && isToday(o.created_at)
   );
 
   // Split into GCash and non-GCash (cash / other)
   const todayGcashOrders = todayCompleted.filter(isGcash);
-  const todayGcashTotal = todayGcashOrders.reduce((s, o) => s + (o.total || 0), 0);
+  const todayGcashTotal = sumTotal(todayGcashOrders);
 
   const todayCashOrders = todayCompleted.filter(o => !isGcash(o));
-  const todaySales = todayCashOrders.reduce((s, o) => s + (o.total || 0), 0); // non-GCash only
+  const todaySales = sumTotal(todayCashOrders); // non-GCash only
 
-  // ── Pending created today ──
-  const pendingTodayOrders = allOrders.filter(
-    o => o.status === "pending" && isToday(o.created_at)
-  );
-  const pendingTodayTotal = pendingTodayOrders.reduce((s, o) => s + (o.total || 0), 0);
-
-  // ── All pending (any date) – shown in the top bar ──
-  const pendingOrders = allOrders.filter(o => o.status === "pending");
-  const pendingTotal = pendingOrders.reduce((s, o) => s + (o.total || 0), 0);
-
-  // ── Paid Credits row: ALL pending (unpaid) orders from OLD days (created before today) ──
-  const paidCreditsOrders = allOrders.filter(
-    o => o.status === "pending" && isOlderThanToday(o.created_at)
-  );
-  const paidCreditsTotal = paidCreditsOrders.reduce((s, o) => s + (o.total || 0), 0);
-
-  // Money actually collected today from old orders (created before today, paid today).
-  // Not displayed as its own row, but still counted in Grand Total and Total GCash.
+  // ── 2) Old orders (created before today) that were PAID today ──
+  //    Shown as the "Paid Credits" row. Cash + GCash both included.
   const collectedOldToday = allOrders.filter(
     o =>
       o.status === "completed" &&
       isOlderThanToday(o.created_at) &&
       isToday(paidDate(o))
   );
-  const collectedOldTotal = collectedOldToday.reduce((s, o) => s + (o.total || 0), 0);
+  const collectedOldTotal = sumTotal(collectedOldToday);
 
-  // Grand total = everything collected today (cash + GCash, new + old orders)
+  // ── 3) Grand total = everything actually collected today ──
+  //    (today's cash + today's GCash + old credits paid today)
   const grandTotal = todaySales + todayGcashTotal + collectedOldTotal;
+  const grandTotalCount =
+    todayCashOrders.length + todayGcashOrders.length + collectedOldToday.length;
 
-  // Total GCash collected today (today's GCash sales + old orders paid via GCash today)
+  // ── 4) GCash portion of the Grand Total (info only, NOT added again) ──
   const gcashOrdersToday = [...todayGcashOrders, ...collectedOldToday.filter(isGcash)];
-  const gcashTotal = gcashOrdersToday.reduce((s, o) => s + (o.total || 0), 0);
+  const gcashTotal = sumTotal(gcashOrdersToday);
+
+  // ── 5) Unpaid old credits (created before today, still pending) ──
+  //    NOT part of Grand Total because the money hasn't been collected yet.
+  const unpaidCreditsOrders = allOrders.filter(
+    o => o.status === "pending" && isOlderThanToday(o.created_at)
+  );
+  const unpaidCreditsTotal = sumTotal(unpaidCreditsOrders);
+
+  // ── 6) Pending created today ──
+  const pendingTodayOrders = allOrders.filter(
+    o => o.status === "pending" && isToday(o.created_at)
+  );
+  const pendingTodayTotal = sumTotal(pendingTodayOrders);
+
+  // ── 7) All pending (any date) – shown in the top bar ──
+  const pendingOrders = allOrders.filter(o => o.status === "pending");
+  const pendingTotal = sumTotal(pendingOrders);
 
   // Orders created today (for the top bar label)
   const ordersTodayCount = allOrders.filter(o => isToday(o.created_at)).length;
@@ -233,6 +242,10 @@ export default function App() {
   const PENDING_COLOR = "#FCD34D";
   const PAID_COLOR = "#86EFAC";
   const GCASH_COLOR = "#60A5FA";
+
+  const rowStyle = (mb = 4) => ({
+    display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: mb,
+  });
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
@@ -266,7 +279,7 @@ export default function App() {
         }
         .sidebar-footer {
           flex-shrink: 0;
-          max-height: 42vh;
+          max-height: 48vh;
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
@@ -407,51 +420,52 @@ export default function App() {
             padding: "10px 14px 12px",
             borderTop: "1px solid rgba(255,255,255,0.12)",
           }}>
-            {/* Today's Sales — excludes GCash */}
-            <div
-              title="Today's completed sales, not including GCash"
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}
-            >
+            {/* Today's Sales — cash / non-GCash */}
+            <div title="Today's completed sales, not including GCash" style={rowStyle(4)}>
               <span style={{ fontSize: 10, opacity: 0.7 }}>Today's Sales ({todayCashOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800 }}>{fmt(todaySales)}</span>
             </div>
 
-            {/* Today's GCash — separated from Today's Sales */}
-            <div
-              title="Today's completed GCash sales"
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}
-            >
+            {/* Today's GCash */}
+            <div title="Today's completed GCash sales" style={rowStyle(4)}>
               <span style={{ fontSize: 10, opacity: 0.7 }}>Today's GCash ({todayGcashOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: GCASH_COLOR }}>{fmt(todayGcashTotal)}</span>
             </div>
 
-            <div
-              title="All pending payments from previous days"
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}
-            >
-              <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Credits ({paidCreditsOrders.length})</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(paidCreditsTotal)}</span>
+            {/* Paid Credits — old orders PAID today (counted in Grand Total) */}
+            <div title="Old orders (created before today) that were paid today, cash + GCash" style={rowStyle(6)}>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Credits ({collectedOldToday.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: PAID_COLOR }}>{fmt(collectedOldTotal)}</span>
             </div>
 
-            <div
-              title="All GCash collected today, including old orders paid today"
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}
-            >
-              <span style={{ fontSize: 10, opacity: 0.7 }}>Total GCash ({gcashOrdersToday.length})</span>
-              <span style={{ fontSize: 13, fontWeight: 800, color: GCASH_COLOR }}>{fmt(gcashTotal)}</span>
-            </div>
-
+            {/* Grand Total */}
             <div style={{
-              padding: "6px 10px", marginBottom: 5,
+              padding: "6px 10px", marginBottom: 4,
               background: "rgba(255,255,255,0.18)",
               border: "1px solid rgba(255,255,255,0.35)",
               borderRadius: 7,
               display: "flex", justifyContent: "space-between", alignItems: "baseline",
             }}>
-              <span style={{ fontSize: 10, opacity: 0.85 }}>Grand Total</span>
+              <span style={{ fontSize: 10, opacity: 0.85 }}>Grand Total ({grandTotalCount})</span>
               <span style={{ fontSize: 15, fontWeight: 800 }}>{fmt(grandTotal)}</span>
             </div>
 
+            {/* Info only: GCash portion already included in Grand Total */}
+            <div
+              title="GCash portion of the Grand Total (today's GCash + old orders paid via GCash today). Already included above."
+              style={{ ...rowStyle(8), padding: "0 4px" }}
+            >
+              <span style={{ fontSize: 10, opacity: 0.6 }}>↳ incl. GCash ({gcashOrdersToday.length})</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: GCASH_COLOR }}>{fmt(gcashTotal)}</span>
+            </div>
+
+            {/* Unpaid old credits — NOT in Grand Total */}
+            <div title="Old orders (created before today) that are still unpaid. Not in Grand Total." style={rowStyle(6)}>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Unpaid Credits ({unpaidCreditsOrders.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(unpaidCreditsTotal)}</span>
+            </div>
+
+            {/* Pending created today */}
             <div
               onClick={() => handleSetView("orders")}
               title="View orders"
