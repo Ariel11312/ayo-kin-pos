@@ -22,16 +22,14 @@ const EMPTY_FORM = { type: "", idNo: "", name: "", address: "" };
 
 const PENDING_COLOR = "#D97706";
 
-// Desktop table columns. Columns from CENTER_FROM_INDEX onward (Items,
-// Total, Discount, Payment, Status, Actions) are center-aligned; everything
-// before that (Order ID, Date & Time, Paid On, Type, and the customer-info
-// columns) reads left-aligned like ordinary text.
+// Desktop table columns. Columns from CENTER_FROM_INDEX onward (Total,
+// Discount, Payment, Status, Actions) are center-aligned; everything
+// before that (Order ID, Date & Time, Paid On, Type, the customer-info
+// columns, and Items) reads left-aligned like ordinary text.
 const TABLE_HEADERS = ["Order ID", "Date & Time", "Paid On", "Type", "Customer", "Contact", "Delivery Address", "Items", "Total", "Discount", "Payment", "Status", "Actions"];
-const CENTER_FROM_INDEX = TABLE_HEADERS.indexOf("Items");
+const CENTER_FROM_INDEX = TABLE_HEADERS.indexOf("Total");
 
 // ── Date-range (sales period) filter options ──────────────
-// Each entry drives one filter button plus the label shown next to the
-// sales total in the page header (e.g. "Today's sales", "This week's sales").
 const DATE_FILTERS = [
   { key: "today",     label: "Today",      headerLabel: "Today's"      },
   { key: "yesterday", label: "Yesterday",  headerLabel: "Yesterday's"  },
@@ -56,11 +54,9 @@ const fmtDateTime = (iso) => {
 };
 
 // Text shown under "Paid On".
-//  - pending               → "Unpaid" (checked FIRST, even if paid_at has a
-//                            value, e.g. from a DB default or the POS saving it early)
+//  - pending               → "Unpaid"
 //  - has paid_at           → the exact date & time it was paid
-//  - completed, no paid_at → old order from before this column existed;
-//                            fall back to created_at
+//  - completed, no paid_at → old order; fall back to created_at
 //  - voided / refunded     → "—"
 const paidLabel = (o) => {
   if (o.status === "pending") return "Unpaid";
@@ -69,10 +65,22 @@ const paidLabel = (o) => {
   return "—";
 };
 
+// Pull a readable name/qty/line-total out of an order item regardless of
+// which field names the item objects actually use — different parts of
+// the app may have written items with slightly different shapes over time.
+function itemFields(it) {
+  const name  = it.name || it.item_name || it.product_name || it.service || it.title || it.label || "Item";
+  const qty   = it.qty ?? it.quantity ?? 1;
+  const price = it.price ?? it.unit_price ?? 0;
+  const line  = it.total ?? it.subtotal ?? (price * qty);
+  return { name, qty, line };
+}
+
+// Safe list of normalized items for an order (items may be null/undefined).
+const orderItems = (o) => (Array.isArray(o.items) ? o.items : []).map(itemFields);
+
 // Returns { start, end } (end exclusive) for a given filter key, or null
-// for "all" (meaning: no bound, include everything). All boundaries are
-// computed from the browser's local time, so the cutoff lines up with
-// whatever "today"/"this week" etc. mean for whoever is using the till.
+// for "all" (meaning: no bound, include everything).
 function getDateRange(filterKey) {
   const now = new Date();
   const todayStart = startOfDay(now);
@@ -154,7 +162,6 @@ export default function OrdersView({ orders, setOrders }) {
           });
 
           // Keep an open modal in sync if its underlying order just changed
-          // (e.g. voided/discounted from another terminal while open here)
           if (eventType === "UPDATE") {
             setSelectedOrder(curr => (curr && curr.id === newRow.id ? { ...curr, ...newRow } : curr));
             setDiscountModal(curr => (curr && curr.id === newRow.id ? { ...curr, ...newRow } : curr));
@@ -213,8 +220,6 @@ export default function OrdersView({ orders, setOrders }) {
   };
 
   // ── Derived data ───────────────────────────────────────
-  // Period filter (today / yesterday / week / month / year / all) narrows
-  // the order set first; status filter + search then apply on top of that.
   const dateRange = getDateRange(dateFilter);
   const periodOrders = orders.filter(o => {
     if (!dateRange) return true; // "all"
@@ -241,7 +246,6 @@ export default function OrdersView({ orders, setOrders }) {
   ];
 
   // ── Previous customers (from ALL completed orders, not just the period) ──
-  // Grouped by contact number, falling back to name when there's no number.
   const customerList = (() => {
     const map = new Map();
     orders
@@ -270,20 +274,6 @@ export default function OrdersView({ orders, setOrders }) {
   })();
 
   // ── Print the currently visible orders as a receipt-style report ──
-  // Prints exactly what's on screen — respects the active period filter
-  // (Today/This Week/etc.), status filter, and search box — plus a totals
-  // summary for the whole period at the bottom.
-  // Pull a readable name/qty/line-total out of an order item regardless of
-  // which field names the item objects actually use — different parts of
-  // the app may have written items with slightly different shapes over time.
-  function itemFields(it) {
-    const name  = it.name || it.item_name || it.product_name || it.service || "Item";
-    const qty   = it.qty ?? it.quantity ?? 1;
-    const price = it.price ?? it.unit_price ?? 0;
-    const line  = it.total ?? it.subtotal ?? (price * qty);
-    return { name, qty, line };
-  }
-
   function printOrders() {
     const now = new Date();
     const dateStr = now.toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
@@ -293,14 +283,11 @@ export default function OrdersView({ orders, setOrders }) {
       const time = fmtDateTime(o.created_at);
       const dm   = DISCOUNT_META[o.discount_type];
 
-      const itemsHtml = (o.items || []).map(it => {
-        const { name, qty, line } = itemFields(it);
-        return `
+      const itemsHtml = orderItems(o).map(({ name, qty, line }) => `
           <tr>
             <td>${qty} × ${name}</td>
             <td style="text-align:right">${fmt(line)}</td>
-          </tr>`;
-      }).join("");
+          </tr>`).join("");
 
       const customerHtml = [
         o.customer_name    ? `<div>Customer: <strong>${o.customer_name}</strong></div>` : "",
@@ -459,8 +446,6 @@ export default function OrdersView({ orders, setOrders }) {
   };
 
   // ── Apply / save PWD / Senior Citizen discount + ID info ──
-  // Used both for first-time discounting and for recording ID details
-  // when the customer presents their SC/PWD card later (late presentation).
   const applyDiscount = async (order) => {
     const { type, idNo, name, address } = discountForm;
 
@@ -535,8 +520,7 @@ export default function OrdersView({ orders, setOrders }) {
     fontSize: noZoomFont(isMobile), padding: isMobile ? "11px 12px" : undefined,
   };
 
-  // Truncating text cell shared by the Customer/Contact/Address columns —
-  // keeps long values from blowing out the row height or column width.
+  // Truncating text cell shared by the Customer/Contact/Address columns.
   const truncCell = (maxWidth) => ({
     padding: "10px 14px", color: MUTED, maxWidth,
     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
@@ -546,8 +530,6 @@ export default function OrdersView({ orders, setOrders }) {
   return (
     <div style={{
       padding: isMobile ? 14 : 22,
-      // 100dvh tracks the visible viewport on mobile browsers, where the
-      // address bar makes 100vh taller than what you can actually see.
       height: isMobile ? "100dvh" : "100vh",
       boxSizing: "border-box", display: "flex", flexDirection: "column",
       overflow: "hidden", fontFamily: FONT,
@@ -573,7 +555,7 @@ export default function OrdersView({ orders, setOrders }) {
         </div>
       </div>
 
-      {/* Summary cards — 2-column grid on phones, 5 across on desktop */}
+      {/* Summary cards */}
       <div style={{
         display: "grid",
         gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(5, 1fr)",
@@ -590,7 +572,7 @@ export default function OrdersView({ orders, setOrders }) {
         ))}
       </div>
 
-      {/* Date period filter (Today / Yesterday / This Week / This Month / This Year / All Time) */}
+      {/* Date period filter */}
       <div style={{
         display: "flex", gap: 6, marginBottom: 10, flexShrink: 0,
         overflowX: "auto", WebkitOverflowScrolling: "touch", scrollbarWidth: "none",
@@ -669,6 +651,7 @@ export default function OrdersView({ orders, setOrders }) {
               const canDiscount     = order.status === "completed" && !order.discount_type;
               const canEditDiscount = order.status === "completed" && !!dm;
               const missingId       = !!dm && !order.discount_info?.idNo;
+              const items           = orderItems(order);
 
               return (
                 <div
@@ -689,7 +672,6 @@ export default function OrdersView({ orders, setOrders }) {
                   <div style={{ fontSize: 12, color: MUTED, marginTop: 5, textTransform: "capitalize" }}>
                     {fmtDateTime(order.created_at)}
                     {" · "}{order.type}
-                    {" · "}{order.items.length} item{order.items.length !== 1 ? "s" : ""}
                     {" · "}<span style={{ textTransform: "uppercase", fontWeight: 700 }}>{order.payment_method}</span>
                   </div>
 
@@ -698,9 +680,20 @@ export default function OrdersView({ orders, setOrders }) {
                     Paid: {paidLabel(order)}
                   </div>
 
+                  {/* Items — actual item names with quantity */}
+                  {items.length > 0 && (
+                    <div style={{ fontSize: 12, color: TEXT, marginTop: 6, lineHeight: 1.5 }}>
+                      {items.map((it, i) => (
+                        <div key={i}>
+                          <span style={{ fontWeight: 700 }}>{it.qty}×</span> {it.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Customer info line — name, contact, delivery address */}
                   {(order.customer_name || order.contact_number || order.delivery_address) && (
-                    <div style={{ fontSize: 12, color: TEXT, marginTop: 4, lineHeight: 1.5 }}>
+                    <div style={{ fontSize: 12, color: TEXT, marginTop: 6, lineHeight: 1.5 }}>
                       {order.customer_name && <div style={{ fontWeight: 700 }}>{order.customer_name}</div>}
                       {order.contact_number && <div style={{ color: MUTED }}>{order.contact_number}</div>}
                       {order.delivery_address && (
@@ -820,6 +813,7 @@ export default function OrdersView({ orders, setOrders }) {
                   const canDiscount      = order.status === "completed" && !order.discount_type;
                   const canEditDiscount  = order.status === "completed" && !!dm;
                   const missingId        = !!dm && !order.discount_info?.idNo;
+                  const items            = orderItems(order);
 
                   return (
                     <tr
@@ -866,8 +860,18 @@ export default function OrdersView({ orders, setOrders }) {
                         {order.delivery_address || "—"}
                       </td>
 
-                      {/* Items */}
-                      <td style={{ padding: "10px 14px", textAlign: "center", color: MUTED }}>{order.items.length}</td>
+                      {/* Items — actual item names with quantity, one per line */}
+                      <td style={{ padding: "10px 14px", textAlign: "left", minWidth: 170, maxWidth: 260 }}>
+                        {items.length > 0 ? (
+                          items.map((it, i) => (
+                            <div key={i} style={{ fontSize: 12, lineHeight: 1.45, color: TEXT }}>
+                              <span style={{ fontWeight: 700, color: MUTED }}>{it.qty}×</span> {it.name}
+                            </div>
+                          ))
+                        ) : (
+                          <span style={{ color: MUTED }}>—</span>
+                        )}
+                      </td>
 
                       {/* Total — show strikethrough original if discounted */}
                       <td style={{ padding: "10px 14px", textAlign: "center" }}>

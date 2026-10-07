@@ -1,16 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../supabase/supabase";
 import { getCategories } from "./data/category"
-import INIT_ITEMS, { getItems } from "./data/items"
-import INIT_ORDERS, { getOrders } from "./data/orders"
-import { DR, DR_LIGHT, BG, TEXT, MUTED, BORDER, SUBTLE, SUCCESS, SUCCESS_BG, FONT } from "../ui/styles"
-import Badge from "../function/badge"
+import { getItems } from "./data/items"
+import { getOrders } from "./data/orders"
+import { DR, BG, TEXT, MUTED, BORDER, SUCCESS, FONT } from "../ui/styles"
 import fmt from "../function/fmt"
-import Btn from "../function/btn"
-import Field from "../function/field"
-import Modal, { PaymentModal, ReceiptModal } from '../function/modal';
-import { ErrBox, OkBox } from "../function/messageBox";
 import POSView from "./Views/POSView";
 import MenuView from "./Views/MenuView";
 import OrdersView from "./Views/OrderView";
@@ -25,6 +20,102 @@ import RiderScannerView from "./Views/RiderScanView";
 import KioskQR from "./Views/Kiosqr";
 
 const LOGO_RED = "#C81E1E";
+
+const PENDING_COLOR = "#FCD34D";
+const PAID_COLOR = "#86EFAC";
+const GCASH_COLOR = "#60A5FA";
+
+/* ───────────────────────── Pure helpers ───────────────────────── */
+
+// Is date `d` on the same calendar day as `ref`?
+const isSameDay = (d, ref) => !!d && new Date(d).toDateString() === ref.toDateString();
+
+// Was date `d` before the start of `ref`'s day?
+const isBeforeDay = (d, ref) => {
+  if (!d) return false;
+  const start = new Date(ref);
+  start.setHours(0, 0, 0, 0);
+  return new Date(d) < start;
+};
+
+// The moment an order was actually PAID.
+// paid_at is set by the DB trigger when status becomes 'completed'.
+// We deliberately do NOT fall back to updated_at: any edit would make an
+// old order look like it was "paid today". created_at is the safe fallback
+// (an old completed order with no paid_at will never count as paid today).
+const paidDate = (o) => o.paid_at || o.completed_at || o.created_at;
+
+const isGcash = (o) =>
+  String(o.payment_method || o.paymentMethod || o.payment || "")
+    .toLowerCase()
+    .includes("gcash");
+
+const sumTotal = (list) => list.reduce((s, o) => s + (Number(o.total) || 0), 0);
+
+// Compute all sidebar / top-bar numbers in one place.
+function computeStats(allOrders, now) {
+  // 1) Orders created today and already completed
+  const todayCompleted = allOrders.filter(
+    (o) => o.status === "completed" && isSameDay(o.created_at, now)
+  );
+  const todayGcashOrders = todayCompleted.filter(isGcash);
+  const todayGcashTotal = sumTotal(todayGcashOrders);
+  const todayCashOrders = todayCompleted.filter((o) => !isGcash(o));
+  const todaySales = sumTotal(todayCashOrders);
+
+  // 2) Old orders (created before today) that were PAID today
+  const collectedOldToday = allOrders.filter(
+    (o) =>
+      o.status === "completed" &&
+      isBeforeDay(o.created_at, now) &&
+      isSameDay(paidDate(o), now)
+  );
+  const collectedOldTotal = sumTotal(collectedOldToday);
+
+  // 3) Grand total = everything actually collected today
+  const grandTotal = todaySales + todayGcashTotal + collectedOldTotal;
+  const grandTotalCount =
+    todayCashOrders.length + todayGcashOrders.length + collectedOldToday.length;
+
+  // 4) GCash portion of Grand Total (info only)
+  const gcashOrdersToday = [...todayGcashOrders, ...collectedOldToday.filter(isGcash)];
+  const gcashTotal = sumTotal(gcashOrdersToday);
+
+  // 5) Unpaid old credits (created before today, still pending)
+  const unpaidCreditsOrders = allOrders.filter(
+    (o) => o.status === "pending" && isBeforeDay(o.created_at, now)
+  );
+  const unpaidCreditsTotal = sumTotal(unpaidCreditsOrders);
+
+  // 6) Pending created today
+  const pendingTodayOrders = allOrders.filter(
+    (o) => o.status === "pending" && isSameDay(o.created_at, now)
+  );
+  const pendingTodayTotal = sumTotal(pendingTodayOrders);
+
+  // 7) All pending (any date)
+  const pendingTotal = sumTotal(allOrders.filter((o) => o.status === "pending"));
+
+  // 8) Orders created today
+  const ordersTodayCount = allOrders.filter((o) => isSameDay(o.created_at, now)).length;
+
+  return {
+    todayCashOrders, todaySales,
+    todayGcashOrders, todayGcashTotal,
+    collectedOldToday, collectedOldTotal,
+    grandTotal, grandTotalCount,
+    gcashOrdersToday, gcashTotal,
+    unpaidCreditsOrders, unpaidCreditsTotal,
+    pendingTodayOrders, pendingTodayTotal,
+    pendingTotal, ordersTodayCount,
+  };
+}
+
+const rowStyle = (mb = 4) => ({
+  display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: mb,
+});
+
+/* ───────────────────────── Logo bits ───────────────────────── */
 
 function ChromeText({ children, fontSize, letterSpacing = "0.5px" }) {
   return (
@@ -80,6 +171,8 @@ function PowerBadge({ size }) {
   );
 }
 
+/* ───────────────────────── App ───────────────────────── */
+
 export default function App() {
   const navigate = useNavigate();
   const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
@@ -88,38 +181,72 @@ export default function App() {
   });
   const [demoMode, setDemoMode] = useState(false);
   const [categories, setCategories] = useState([]);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-
-  useEffect(() => {
-    async function fetchLayoutData() {
-      const data = await getCategories();
-      setCategories(data || []);
-    }
-    fetchLayoutData();
-  }, []);
-
   const [items, setItems] = useState([]);
-  useEffect(() => {
-    async function fetchItemsData() {
-      const data = await getItems();
-      setItems(data || []);
-    }
-    fetchItemsData();
-  }, []);
-
   const [orders, setOrders] = useState([]);
-  useEffect(() => {
-    async function fetchOrdersData() {
-      const data = await getOrders();
-      setOrders(data || []);
-    }
-    fetchOrdersData();
-  }, []);
-
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [clock, setClock] = useState(new Date());
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+
+  // ── Initial data loads ──
+  useEffect(() => {
+    (async () => {
+      const data = await getCategories();
+      setCategories(data || []);
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const data = await getItems();
+      setItems(data || []);
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      const data = await getOrders();
+      setOrders(data || []);
+    })();
+  }, []);
+
+  // ── Keep orders in sync (any device) via Supabase realtime + 60s backup poll ──
+  useEffect(() => {
+    let timer;
+    let cancelled = false;
+
+    const refetch = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        try {
+          const data = await getOrders();
+          if (!cancelled) setOrders(data || []);
+        } catch (e) {
+          console.error("Orders refresh failed:", e);
+        }
+      }, 300); // debounce bursts of events
+    };
+
+    const channel = supabase
+      .channel("orders-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, refetch)
+      .subscribe();
+
+    const poll = setInterval(refetch, 60000);
+
+    // Refresh when the tab becomes visible again (phone sleep, tab switch)
+    const onVisible = () => { if (document.visibilityState === "visible") refetch(); };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   useEffect(() => { setDemoMode(!config.supabaseUrl || !config.supabaseKey); }, [config]);
   useEffect(() => { const t = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(t); }, []);
@@ -161,91 +288,25 @@ export default function App() {
     { key: "kiosqr", emoji: "📱", label: "Kiosk QR" },
   ];
 
-  const allOrders = orders || [];
-
-  // ── Date helpers ──────────────────────────────────────────────
-  const startOfToday = new Date(clock);
-  startOfToday.setHours(0, 0, 0, 0);
-
-  const isToday = (d) => !!d && new Date(d).toDateString() === clock.toDateString();
-
-  // Created on a day BEFORE today (i.e. an "old" transaction)
-  const isOlderThanToday = (d) => !!d && new Date(d) < startOfToday;
-
-  // The moment an order was settled.
-  // NOTE: updated_at is only a last-resort fallback. If your orders table has
-  // paid_at / completed_at, make sure they are filled in when an order is paid,
-  // otherwise editing an old completed order today would count as "collected today".
-  const paidDate = (o) => o.paid_at || o.completed_at || o.updated_at;
-
-  // ── Payment method helper ─────────────────────────────────────
-  // Adjust the field names below if your orders use a different column.
-  const isGcash = (o) =>
-    String(o.payment_method || o.paymentMethod || o.payment || "")
-      .toLowerCase()
-      .includes("gcash");
-
-  const sumTotal = (list) => list.reduce((s, o) => s + (Number(o.total) || 0), 0);
-
-  // ── 1) Today's completed orders (created today and already paid) ──
-  const todayCompleted = allOrders.filter(
-    o => o.status === "completed" && isToday(o.created_at)
+  // Recompute only when orders change or the calendar day rolls over
+  // (not every second when the clock ticks).
+  const todayKey = clock.toDateString();
+  const stats = useMemo(
+    () => computeStats(orders || [], new Date()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [orders, todayKey]
   );
 
-  // Split into GCash and non-GCash (cash / other)
-  const todayGcashOrders = todayCompleted.filter(isGcash);
-  const todayGcashTotal = sumTotal(todayGcashOrders);
-
-  const todayCashOrders = todayCompleted.filter(o => !isGcash(o));
-  const todaySales = sumTotal(todayCashOrders); // non-GCash only
-
-  // ── 2) Old orders (created before today) that were PAID today ──
-  //    Shown as the "Paid Credits" row. Cash + GCash both included.
-  const collectedOldToday = allOrders.filter(
-    o =>
-      o.status === "completed" &&
-      isOlderThanToday(o.created_at) &&
-      isToday(paidDate(o))
-  );
-  const collectedOldTotal = sumTotal(collectedOldToday);
-
-  // ── 3) Grand total = everything actually collected today ──
-  //    (today's cash + today's GCash + old credits paid today)
-  const grandTotal = todaySales + todayGcashTotal + collectedOldTotal;
-  const grandTotalCount =
-    todayCashOrders.length + todayGcashOrders.length + collectedOldToday.length;
-
-  // ── 4) GCash portion of the Grand Total (info only, NOT added again) ──
-  const gcashOrdersToday = [...todayGcashOrders, ...collectedOldToday.filter(isGcash)];
-  const gcashTotal = sumTotal(gcashOrdersToday);
-
-  // ── 5) Unpaid old credits (created before today, still pending) ──
-  //    NOT part of Grand Total because the money hasn't been collected yet.
-  const unpaidCreditsOrders = allOrders.filter(
-    o => o.status === "pending" && isOlderThanToday(o.created_at)
-  );
-  const unpaidCreditsTotal = sumTotal(unpaidCreditsOrders);
-
-  // ── 6) Pending created today ──
-  const pendingTodayOrders = allOrders.filter(
-    o => o.status === "pending" && isToday(o.created_at)
-  );
-  const pendingTodayTotal = sumTotal(pendingTodayOrders);
-
-  // ── 7) All pending (any date) – shown in the top bar ──
-  const pendingOrders = allOrders.filter(o => o.status === "pending");
-  const pendingTotal = sumTotal(pendingOrders);
-
-  // Orders created today (for the top bar label)
-  const ordersTodayCount = allOrders.filter(o => isToday(o.created_at)).length;
-
-  const PENDING_COLOR = "#FCD34D";
-  const PAID_COLOR = "#86EFAC";
-  const GCASH_COLOR = "#60A5FA";
-
-  const rowStyle = (mb = 4) => ({
-    display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: mb,
-  });
+  const {
+    todayCashOrders, todaySales,
+    todayGcashOrders, todayGcashTotal,
+    collectedOldToday, collectedOldTotal,
+    grandTotal, grandTotalCount,
+    gcashOrdersToday, gcashTotal,
+    unpaidCreditsOrders, unpaidCreditsTotal,
+    pendingTodayOrders, pendingTodayTotal,
+    pendingTotal, ordersTodayCount,
+  } = stats;
 
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
@@ -285,7 +346,6 @@ export default function App() {
           overscroll-behavior: contain;
         }
 
-        /* Custom slim scrollbar for the nav + footer so they don't look cut off */
         .sidebar-nav::-webkit-scrollbar,
         .sidebar-footer::-webkit-scrollbar { width: 6px; }
         .sidebar-nav::-webkit-scrollbar-thumb,
@@ -540,8 +600,6 @@ export default function App() {
           </div>
         </div>
       </div>
-
-      {showConfig && <ConfigPanel config={config} setConfig={setConfig} demoMode={demoMode} setDemoMode={setDemoMode} onClose={() => setShowConfig(false)} />}
 
       {showLogoutConfirm && (
         <div
