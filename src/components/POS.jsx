@@ -18,6 +18,7 @@ import ExpensesView from "./Views/ExpensesView";
 import PromoView from "./Views/PromoView";
 import RiderScannerView from "./Views/RiderScanView";
 import KioskQR from "./Views/Kiosqr";
+import SalesDetailModal from "./SalesDetailModal";
 
 const LOGO_RED = "#C81E1E";
 
@@ -115,6 +116,12 @@ const rowStyle = (mb = 4) => ({
   display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: mb,
 });
 
+// Clickable stat row in the sidebar footer
+const clickableRow = (mb = 4) => ({
+  ...rowStyle(mb),
+  cursor: "pointer",
+});
+
 /* ───────────────────────── Logo bits ───────────────────────── */
 
 function ChromeText({ children, fontSize, letterSpacing = "0.5px" }) {
@@ -188,6 +195,8 @@ export default function App() {
   const [clock, setClock] = useState(new Date());
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+  // Which sidebar stat's detail list is open: "sales" | "gcash" | "credits" | "grand" | "gcashAll" | null
+  const [detail, setDetail] = useState(null);
 
   // ── Initial data loads ──
   useEffect(() => {
@@ -308,6 +317,40 @@ export default function App() {
     pendingTotal, ordersTodayCount,
   } = stats;
 
+  // Config for the detail modal — derived from live stats so it
+  // updates in real time while the modal is open.
+  const detailConfig = {
+    sales: {
+      title: "Today's Sales (Cash)",
+      orders: todayCashOrders,
+      accent: DR,
+    },
+    gcash: {
+      title: "Today's GCash",
+      orders: todayGcashOrders,
+      accent: "#2563EB",
+    },
+    credits: {
+      title: "Paid Credits",
+      orders: collectedOldToday,
+      accent: "#16A34A",
+      showCreated: true,
+      showMethod: true,
+    },
+    grand: {
+      title: "Grand Total — All Paid Today",
+      orders: [...todayCashOrders, ...todayGcashOrders, ...collectedOldToday],
+      accent: DR,
+      showMethod: true,
+    },
+    gcashAll: {
+      title: "GCash (incl. old orders paid today)",
+      orders: gcashOrdersToday,
+      accent: "#2563EB",
+      showCreated: true,
+    },
+  }[detail];
+
   return (
     <div style={{ fontFamily: FONT, background: BG, color: TEXT }}>
       <style dangerouslySetInnerHTML={{
@@ -355,6 +398,11 @@ export default function App() {
         }
         .sidebar-nav::-webkit-scrollbar-track,
         .sidebar-footer::-webkit-scrollbar-track { background: transparent; }
+
+        /* Clickable stat rows */
+        .stat-click { transition: opacity 0.12s, background 0.12s; border-radius: 5px; }
+        .stat-click:hover { background: rgba(255,255,255,0.1); }
+        .stat-click:active { opacity: 0.75; }
 
         .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 
@@ -475,45 +523,68 @@ export default function App() {
             })}
           </nav>
 
-          {/* Footer — compact inline stats */}
+          {/* Footer — compact inline stats (click a row to see the list) */}
           <div className="sidebar-footer" style={{
             padding: "10px 14px 12px",
             borderTop: "1px solid rgba(255,255,255,0.12)",
           }}>
             {/* Today's Sales — cash / non-GCash */}
-            <div title="Today's completed sales, not including GCash" style={rowStyle(4)}>
+            <div
+              className="stat-click"
+              onClick={() => setDetail("sales")}
+              title="Click to see today's paid orders (cash)"
+              style={clickableRow(4)}
+            >
               <span style={{ fontSize: 10, opacity: 0.7 }}>Today's Sales ({todayCashOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800 }}>{fmt(todaySales)}</span>
             </div>
 
             {/* Today's GCash */}
-            <div title="Today's completed GCash sales" style={rowStyle(4)}>
+            <div
+              className="stat-click"
+              onClick={() => setDetail("gcash")}
+              title="Click to see who paid via GCash today"
+              style={clickableRow(4)}
+            >
               <span style={{ fontSize: 10, opacity: 0.7 }}>Today's GCash ({todayGcashOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: GCASH_COLOR }}>{fmt(todayGcashTotal)}</span>
             </div>
 
             {/* Paid Credits — old orders PAID today (counted in Grand Total) */}
-            <div title="Old orders (created before today) that were paid today, cash + GCash" style={rowStyle(6)}>
+            <div
+              className="stat-click"
+              onClick={() => setDetail("credits")}
+              title="Click to see old orders paid today"
+              style={clickableRow(6)}
+            >
               <span style={{ fontSize: 10, opacity: 0.7 }}>Paid Credits ({collectedOldToday.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: PAID_COLOR }}>{fmt(collectedOldTotal)}</span>
             </div>
 
             {/* Grand Total */}
-            <div style={{
-              padding: "6px 10px", marginBottom: 4,
-              background: "rgba(255,255,255,0.18)",
-              border: "1px solid rgba(255,255,255,0.35)",
-              borderRadius: 7,
-              display: "flex", justifyContent: "space-between", alignItems: "baseline",
-            }}>
+            <div
+              className="stat-click"
+              onClick={() => setDetail("grand")}
+              title="Click to see everything collected today"
+              style={{
+                padding: "6px 10px", marginBottom: 4,
+                background: "rgba(255,255,255,0.18)",
+                border: "1px solid rgba(255,255,255,0.35)",
+                borderRadius: 7,
+                display: "flex", justifyContent: "space-between", alignItems: "baseline",
+                cursor: "pointer",
+              }}
+            >
               <span style={{ fontSize: 10, opacity: 0.85 }}>Grand Total ({grandTotalCount})</span>
               <span style={{ fontSize: 15, fontWeight: 800 }}>{fmt(grandTotal)}</span>
             </div>
 
             {/* Info only: GCash portion already included in Grand Total */}
             <div
-              title="GCash portion of the Grand Total (today's GCash + old orders paid via GCash today). Already included above."
-              style={{ ...rowStyle(8), padding: "0 4px" }}
+              className="stat-click"
+              onClick={() => setDetail("gcashAll")}
+              title="GCash portion of the Grand Total (today's GCash + old orders paid via GCash today). Click to see the list."
+              style={{ ...clickableRow(8), padding: "0 4px" }}
             >
               <span style={{ fontSize: 10, opacity: 0.6 }}>↳ incl. GCash ({gcashOrdersToday.length})</span>
               <span style={{ fontSize: 11, fontWeight: 700, color: GCASH_COLOR }}>{fmt(gcashTotal)}</span>
@@ -600,6 +671,22 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* ── Sales detail modal (names + amounts) ── */}
+      {detail && detailConfig && (
+        <SalesDetailModal
+          title={detailConfig.title}
+          orders={detailConfig.orders}
+          accent={detailConfig.accent}
+          showMethod={detailConfig.showMethod}
+          showCreated={detailConfig.showCreated}
+          timeOf={paidDate}
+          onClose={() => {
+            setDetail(null);
+            setMobileNavOpen(false);
+          }}
+        />
+      )}
 
       {showLogoutConfirm && (
         <div
