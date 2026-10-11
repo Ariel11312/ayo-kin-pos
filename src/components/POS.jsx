@@ -195,7 +195,7 @@ export default function App() {
   const [clock, setClock] = useState(new Date());
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
-  // Which sidebar stat's detail list is open: "sales" | "gcash" | "credits" | "grand" | "gcashAll" | null
+  // Which sidebar stat's detail list is open: "sales" | "gcash" | "credits" | "grand" | "gcashAll" | "unpaid" | "pending" | null
   const [detail, setDetail] = useState(null);
 
   // ── Initial data loads ──
@@ -348,6 +348,20 @@ export default function App() {
       orders: gcashOrdersToday,
       accent: "#2563EB",
       showCreated: true,
+    },
+    unpaid: {
+      title: "Unpaid Credits (old orders)",
+      orders: unpaidCreditsOrders,
+      accent: "#D97706",
+      unpaid: true,
+      showMethod: true,
+    },
+    pending: {
+      title: "Pending Today",
+      orders: pendingTodayOrders,
+      accent: "#D97706",
+      unpaid: true,
+      showMethod: true,
     },
   }[detail];
 
@@ -591,15 +605,21 @@ export default function App() {
             </div>
 
             {/* Unpaid old credits — NOT in Grand Total */}
-            <div title="Old orders (created before today) that are still unpaid. Not in Grand Total." style={rowStyle(6)}>
+            <div
+              className="stat-click"
+              onClick={() => setDetail("unpaid")}
+              title="Old orders (created before today) that are still unpaid. Not in Grand Total. Click to see the list."
+              style={clickableRow(6)}
+            >
               <span style={{ fontSize: 10, opacity: 0.7 }}>Unpaid Credits ({unpaidCreditsOrders.length})</span>
               <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(unpaidCreditsTotal)}</span>
             </div>
 
             {/* Pending created today */}
             <div
-              onClick={() => handleSetView("orders")}
-              title="View orders"
+              className="stat-click"
+              onClick={() => setDetail("pending")}
+              title="Click to see today's pending orders"
               style={{
                 padding: "6px 10px", marginBottom: 8,
                 background: "rgba(255,255,255,0.1)",
@@ -680,7 +700,8 @@ export default function App() {
           accent={detailConfig.accent}
           showMethod={detailConfig.showMethod}
           showCreated={detailConfig.showCreated}
-          timeOf={paidDate}
+          unpaid={detailConfig.unpaid}
+          timeOf={detailConfig.unpaid ? (o) => o.created_at : paidDate}
           onClose={() => {
             setDetail(null);
             setMobileNavOpen(false);

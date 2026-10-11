@@ -26,7 +26,7 @@ const isGcash = (o) =>
  *  onClose
  */
 export default function SalesDetailModal({
-  title, orders, accent = DR, timeOf, showMethod = false, showCreated = false, onClose,
+  title, orders, accent = DR, timeOf, showMethod = false, showCreated = false, unpaid = false, onClose,
 }) {
   const sorted = [...orders].sort((a, b) => new Date(timeOf(b)) - new Date(timeOf(a)));
   const total = sorted.reduce((s, o) => s + (Number(o.total) || 0), 0);
@@ -85,8 +85,17 @@ export default function SalesDetailModal({
                 </div>
                 <div style={{ fontSize: 11, color: MUTED, fontFamily: "monospace" }}>{o.id}</div>
                 <div style={{ fontSize: 11, color: MUTED }}>
-                  Paid: {fmtTime(timeOf(o))}
-                  {showCreated && <> · Ordered: {fmtTime(o.created_at)}</>}
+                  {unpaid ? (
+                    <>
+                      Ordered: {fmtTime(o.created_at)} ·{" "}
+                      <span style={{ fontWeight: 700, color: "#D97706" }}>Unpaid</span>
+                    </>
+                  ) : (
+                    <>
+                      Paid: {fmtTime(timeOf(o))}
+                      {showCreated && <> · Ordered: {fmtTime(o.created_at)}</>}
+                    </>
+                  )}
                 </div>
               </div>
               <div style={{ fontSize: 14, fontWeight: 800, color: accent, whiteSpace: "nowrap" }}>

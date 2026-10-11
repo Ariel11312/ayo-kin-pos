@@ -84,7 +84,7 @@ export function ReceiptModal({ order, onClose }) {
 
       <div id="receipt-print" style={{ padding: 24, fontFamily: '"Courier New", monospace', fontSize: 13, lineHeight: 1.6 }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
-          <div style={{ fontWeight: 700, fontSize: 18, fontFamily: FONT, letterSpacing: -0.5 }}>SalesPoint POS</div>
+          <div style={{ fontWeight: 700, fontSize: 18, fontFamily: FONT, letterSpacing: -0.5 }}>Bula-On Laundry Shop</div>
           <div style={{ fontSize: 11, color: MUTED }}>Official Receipt</div>
           <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{new Date(order.created_at).toLocaleString("en-PH")}</div>
         </div>
