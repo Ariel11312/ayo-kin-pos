@@ -16,12 +16,11 @@ import useIsMobile, { noZoomFont, SAFE_BOTTOM } from "../../function/useIsMobile
   full create / read / update / delete.
 
   The expense list is filtered by YEAR + MONTH (January–December).
+  The "Expenses per Category (Top 8)" bar chart follows the same
+  filters as the list.
 
-  SCROLLING: the whole page (header, KPI cards, filters, list)
-  scrolls together inside this component's own container. The
-  container fills its parent (height: 100%) instead of using
-  100vh, so it fits correctly under the top bar even on short
-  screens.
+  SCROLLING: the whole page (header, KPI cards, filters, chart,
+  list) scrolls together inside this component's own container.
 ───────────────────────────────────────────────────────── */
 
 // ── Status meta ──────────────────────────────────────────
@@ -61,10 +60,6 @@ const EMPTY_FORM = {
 };
 
 // ── Robust date helpers ───────────────────────────────────
-// Orders can come from different schemas/exports where the
-// timestamp field isn't always called "created_at". Try the
-// common candidates in order so "Sales Today" doesn't silently
-// show ₱0 just because the field name doesn't match.
 const ORDER_DATE_FIELDS = ["created_at", "createdAt", "date", "order_date", "inserted_at", "updated_at"];
 
 function getOrderDate(order) {
@@ -78,8 +73,6 @@ function getOrderDate(order) {
   return null;
 }
 
-// Status values can come back with inconsistent casing ("completed"
-// vs "Completed"), so normalize before comparing.
 const isCompleted = (order) => (order?.status || "").toString().trim().toLowerCase() === "completed";
 
 const isSameDay = (date, ref) => {
@@ -95,9 +88,8 @@ const isSameMonth = (date, ref) => {
   return d.getMonth() === ref.getMonth() && d.getFullYear() === ref.getFullYear();
 };
 
-// Expense dates are stored as "YYYY-MM-DD". Parse the string directly
-// (instead of new Date(str), which treats it as UTC) so an expense on
-// e.g. March 1 never slips into February because of timezones.
+// Expense dates are stored as "YYYY-MM-DD". Parse the string directly so
+// an expense on e.g. March 1 never slips into February because of timezones.
 function getYearMonth(dateStr) {
   if (!dateStr) return null;
   const m = /^(\d{4})-(\d{2})/.exec(String(dateStr));
@@ -107,7 +99,6 @@ function getYearMonth(dateStr) {
   return { year: d.getFullYear(), month: d.getMonth() };
 }
 
-// Display an expense date without timezone drift.
 function formatExpenseDate(dateStr) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || ""));
   const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(dateStr);
@@ -143,6 +134,73 @@ function StatusPill({ status }) {
   );
 }
 
+// ── Horizontal bar chart: top N categories by total spent ─
+function CategoryChart({ expenses, periodLabel, isMobile, limit = 8 }) {
+  const rows = useMemo(() => {
+    const totals = {};
+    expenses.forEach((e) => {
+      const key = (e.category || "").trim() || "Uncategorized";
+      totals[key] = (totals[key] || 0) + (Number(e.amount) || 0);
+    });
+    return Object.entries(totals)
+      .map(([category, total]) => ({ category, total }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, limit);
+  }, [expenses, limit]);
+
+  const max = rows.length ? rows[0].total : 0;
+
+  return (
+    <div style={{
+      border: `1px solid ${BORDER}`, borderRadius: 10, background: BG,
+      padding: isMobile ? 14 : 18, marginBottom: isMobile ? 14 : 20,
+    }}>
+      <div style={{ fontSize: 15, fontWeight: 800, color: TEXT }}>
+        Expenses per Category (Top {limit})
+      </div>
+      <div style={{ fontSize: 12, color: MUTED, margin: "3px 0 14px" }}>
+        {periodLabel} — higher = more money spent
+      </div>
+
+      {rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 24, color: MUTED, fontSize: 13 }}>
+          No expenses to chart for this period
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: isMobile ? 10 : 8 }}>
+          {rows.map((r) => {
+            const pct = max > 0 ? Math.max((r.total / max) * 100, 2) : 0;
+            return (
+              <div key={r.category} style={{
+                display: "grid",
+                gridTemplateColumns: isMobile ? "84px 1fr" : "130px 1fr 110px",
+                alignItems: "center", columnGap: 10, rowGap: 2,
+              }}>
+                <div title={r.category} style={{
+                  fontSize: 12, fontWeight: 700, color: TEXT, textAlign: "right",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                  {r.category}
+                </div>
+                <div style={{ background: SUBTLE, borderRadius: 6, height: 18, overflow: "hidden" }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: DR, borderRadius: 6, transition: "width 0.4s ease" }} />
+                </div>
+                <div style={{
+                  fontSize: 12, fontWeight: 800, color: TEXT,
+                  textAlign: isMobile ? "left" : "right",
+                  gridColumn: isMobile ? "2" : "auto",
+                }}>
+                  {fmt(r.total)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ExpensesView({ orders: ordersProp = [] }) {
   const isMobile = useIsMobile();
 
@@ -150,20 +208,14 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // ── Orders: fetched directly instead of trusting the parent's
-  // "orders" prop, since that prop was found to be stale/out of
-  // sync with the rest of the app (Orders Today / Sales Today
-  // showed 0 here while the sidebar showed real numbers). This
-  // guarantees the KPI cards always reflect the live orders table.
+  // ── Orders: fetched directly instead of trusting the parent's prop
   const [ownOrders, setOwnOrders] = useState(null); // null = not loaded yet
   const [ordersError, setOrdersError] = useState(null);
 
   async function fetchOrders() {
     try {
-      const { data, error, count } = await supabase.from("orders").select("*", { count: "exact" });
+      const { data, error } = await supabase.from("orders").select("*");
       if (error) throw error;
-      // eslint-disable-next-line no-console
-      console.log(`[ExpensesView] orders fetch: ${data?.length ?? 0} rows (count=${count})`, data?.slice(0, 2));
       setOwnOrders(data || []);
     } catch (e) {
       setOrdersError(e.message);
@@ -194,8 +246,6 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
     return () => supabase.removeChannel(channel);
   }, []);
 
-  // Prefer the freshly-fetched orders; fall back to the prop only
-  // if our own fetch hasn't resolved yet (avoids a flash of zeros).
   const orders = ownOrders !== null ? ownOrders : ordersProp;
 
   const [search, setSearch] = useState("");
@@ -268,13 +318,10 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
   const now = new Date();
 
   const kpis = useMemo(() => {
-    // Only orders explicitly marked "completed" count toward sales
-    // (case-insensitive, since status casing has been inconsistent).
     const completedOrders = orders.filter(isCompleted);
 
     const ordersToday = orders.filter((o) => isSameDay(getOrderDate(o), now));
 
-    // Every completed order whose date falls on today gets summed here.
     const completedToday = completedOrders.filter((o) => isSameDay(getOrderDate(o), now));
     const salesToday = completedToday.reduce((s, o) => s + (Number(o.total) || 0), 0);
 
@@ -307,11 +354,11 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
       expensesThisMonth,
       netProfitThisMonth,
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, expenses]);
 
   // ══════════════════════════════════════════════════════
-  // YEAR OPTIONS — every year that has expenses, plus the
-  // current year, newest first.
+  // YEAR OPTIONS
   // ══════════════════════════════════════════════════════
   const yearOptions = useMemo(() => {
     const set = new Set([currentYear]);
@@ -323,7 +370,7 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
   }, [expenses, currentYear]);
 
   // ══════════════════════════════════════════════════════
-  // FILTERED LIST (for the table / card list, not the KPIs)
+  // FILTERED LIST (table / cards / chart — not the KPIs)
   // ══════════════════════════════════════════════════════
   const visible = useMemo(() => {
     const q = search.toLowerCase();
@@ -343,7 +390,6 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
 
   const totalVisible = visible.reduce((s, e) => s + (Number(e.amount) || 0), 0);
 
-  // Human-readable label for the active period, e.g. "March 2026"
   const periodLabel = useMemo(() => {
     if (selectedMonth === "all" && selectedYear === "all") return "All Time";
     if (selectedMonth === "all") return `${selectedYear}`;
@@ -493,9 +539,6 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
   }
 
   return (
-    // The WHOLE page scrolls inside this container. It fills its parent
-    // (height: 100%) rather than using 100vh, so it sits correctly under
-    // the top bar and never gets cut off on short screens.
     <div style={{
       padding: isMobile ? 14 : 22,
       height: "100%",
@@ -638,6 +681,9 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
         {" · "}Showing <strong style={{ color: TEXT }}>{visible.length}</strong> expense{visible.length !== 1 ? "s" : ""} · Total{" "}
         <strong style={{ color: DR }}>{fmt(totalVisible)}</strong>
       </div>
+
+      {/* ── Expenses per Category chart (follows the filters) ── */}
+      <CategoryChart expenses={visible} periodLabel={periodLabel} isMobile={isMobile} />
 
       {/* ── List: cards on mobile, table on desktop ─────────── */}
       {isMobile ? (

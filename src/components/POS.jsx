@@ -19,12 +19,14 @@ import PromoView from "./Views/PromoView";
 import RiderScannerView from "./Views/RiderScanView";
 import KioskQR from "./Views/Kiosqr";
 import SalesDetailModal from "./SalesDetailModal";
+import ExpensesDetailModal, { expenseDate, expenseAmount } from "./ExpensesDetailsModal";
 
 const LOGO_RED = "#C81E1E";
 
 const PENDING_COLOR = "#FCD34D";
 const PAID_COLOR = "#86EFAC";
 const GCASH_COLOR = "#60A5FA";
+const EXPENSE_COLOR = "#FCA5A5";
 
 /* ───────────────────────── Pure helpers ───────────────────────── */
 
@@ -190,6 +192,8 @@ export default function App() {
   const [categories, setCategories] = useState([]);
   const [items, setItems] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [showExpensesDetail, setShowExpensesDetail] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [clock, setClock] = useState(new Date());
@@ -245,6 +249,49 @@ export default function App() {
     const poll = setInterval(refetch, 60000);
 
     // Refresh when the tab becomes visible again (phone sleep, tab switch)
+    const onVisible = () => { if (document.visibilityState === "visible") refetch(); };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      clearInterval(poll);
+      document.removeEventListener("visibilitychange", onVisible);
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // ── Keep expenses in sync (realtime + 60s backup poll) ──
+  // NOTE: if ExpensesView already has a data helper (e.g. getExpenses),
+  // swap the supabase query below for it.
+  useEffect(() => {
+    let timer;
+    let cancelled = false;
+
+    const refetch = (delay = 300) => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        try {
+          // No .order() on a specific column, so this works whether your
+          // table uses created_at, expense_date, or date. Sorting and
+          // "today" filtering happen client-side.
+          const { data, error } = await supabase.from("expenses").select("*");
+          if (error) throw error;
+          if (!cancelled) setExpenses(data || []);
+        } catch (e) {
+          console.error("Expenses refresh failed:", e);
+        }
+      }, delay);
+    };
+
+    refetch(0);
+
+    const channel = supabase
+      .channel("expenses-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "expenses" }, () => refetch())
+      .subscribe();
+
+    const poll = setInterval(() => refetch(), 60000);
     const onVisible = () => { if (document.visibilityState === "visible") refetch(); };
     document.addEventListener("visibilitychange", onVisible);
 
@@ -316,6 +363,15 @@ export default function App() {
     pendingTodayOrders, pendingTodayTotal,
     pendingTotal, ordersTodayCount,
   } = stats;
+
+  // Expenses recorded today + net (Grand Total − Expenses)
+  const expensesToday = useMemo(
+    () => expenses.filter((e) => isSameDay(expenseDate(e), new Date())),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [expenses, todayKey]
+  );
+  const expensesTodayTotal = expensesToday.reduce((s, e) => s + expenseAmount(e), 0);
+  const netToday = grandTotal - expensesTodayTotal;
 
   // Config for the detail modal — derived from live stats so it
   // updates in real time while the modal is open.
@@ -633,6 +689,25 @@ export default function App() {
               <span style={{ fontSize: 13, fontWeight: 800, color: PENDING_COLOR }}>{fmt(pendingTodayTotal)}</span>
             </div>
 
+            {/* Expenses today */}
+            <div
+              className="stat-click"
+              onClick={() => setShowExpensesDetail(true)}
+              title="Click to see today's expenses"
+              style={clickableRow(4)}
+            >
+              <span style={{ fontSize: 10, opacity: 0.7 }}>Expenses Today ({expensesToday.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: EXPENSE_COLOR }}>{fmt(expensesTodayTotal)}</span>
+            </div>
+
+            {/* Net = Grand Total − Expenses (info only) */}
+            <div style={{ ...rowStyle(10), padding: "0 4px" }}>
+              <span style={{ fontSize: 10, opacity: 0.6 }}>↳ Net (Grand − Expenses)</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: netToday < 0 ? EXPENSE_COLOR : PAID_COLOR }}>
+                {fmt(netToday)}
+              </span>
+            </div>
+
             <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", textAlign: "center", marginBottom: 8 }}>
               {clock.toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" })} · {clock.toLocaleTimeString("en-PH", { hour: "2-digit", minute: "2-digit" })}
             </div>
@@ -671,6 +746,10 @@ export default function App() {
                 Pending: {fmt(pendingTotal)}
               </span>
               <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
+              <span className="topbar-orders-label" style={{ fontWeight: 700, color: "#B91C1C" }}>
+                Expenses: {fmt(expensesTodayTotal)}
+              </span>
+              <span className="topbar-orders-label" style={{ width: 1, height: 16, background: BORDER, display: "inline-block" }} />
               <span style={{ fontWeight: 700, color: demoMode ? "#92400E" : SUCCESS }}>{demoMode ? "Live Mode" : "Live"}</span>
             </div>
           </div>
@@ -704,6 +783,17 @@ export default function App() {
           timeOf={detailConfig.unpaid ? (o) => o.created_at : paidDate}
           onClose={() => {
             setDetail(null);
+            setMobileNavOpen(false);
+          }}
+        />
+      )}
+
+      {/* ── Expenses detail modal ── */}
+      {showExpensesDetail && (
+        <ExpensesDetailModal
+          expenses={expensesToday}
+          onClose={() => {
+            setShowExpensesDetail(false);
             setMobileNavOpen(false);
           }}
         />
