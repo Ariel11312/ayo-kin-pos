@@ -16,10 +16,9 @@ import EmployeeTimeView from "./Views/EmplyeeTimeView";
 import CalendarView from "./Views/CalendarView";
 import ExpensesView from "./Views/ExpensesView";
 import PromoView from "./Views/PromoView";
-import RiderScannerView from "./Views/RiderScanView";
 import KioskQR from "./Views/Kiosqr";
 import SalesDetailModal from "./SalesDetailModal";
-import ExpensesDetailModal, { expenseDate, expenseAmount } from "./ExpensesDetailsModal";
+import ExpensesDetailModal, { expenseDate, expenseAmount } from "./ExpensesDetailsView";
 
 const LOGO_RED = "#C81E1E";
 
@@ -27,6 +26,13 @@ const PENDING_COLOR = "#FCD34D";
 const PAID_COLOR = "#86EFAC";
 const GCASH_COLOR = "#60A5FA";
 const EXPENSE_COLOR = "#FCA5A5";
+
+// Views that live inside the POS shell. Rider Scanner is now its own page (/rider).
+// Used to ignore stale values saved in localStorage (e.g. "riderScanner").
+const VALID_VIEWS = [
+  "pos", "menu", "orders", "stock", "expenses", "promo",
+  "statistics", "voidRefund", "timeClock", "calendar", "kiosqr",
+];
 
 /* ───────────────────────── Pure helpers ───────────────────────── */
 
@@ -182,9 +188,12 @@ function PowerBadge({ size }) {
 
 /* ───────────────────────── App ───────────────────────── */
 
-export default function App() {
+export default function POS() {
   const navigate = useNavigate();
-  const [view, setView] = useState(() => localStorage.getItem("pos_view") || "pos");
+  const [view, setView] = useState(() => {
+    const saved = localStorage.getItem("pos_view");
+    return VALID_VIEWS.includes(saved) ? saved : "pos";
+  });
   const [config, setConfig] = useState(() => {
     try { return JSON.parse(localStorage.getItem("pos_config") || "{}"); } catch { return {}; }
   });
@@ -329,11 +338,11 @@ export default function App() {
     navigate("/", { replace: true });
   }
 
+  // Rider Scanner removed: it now lives at /rider as a standalone page.
   const navItems = [
     { key: "pos", emoji: "🧾", label: "Sales / POS" },
     { key: "menu", emoji: "📋", label: "Menu Setup" },
     { key: "orders", emoji: "📦", label: "Orders" },
-    { key: "riderScanner", emoji: "🛵", label: "Rider Scanner" },
     { key: "stock", emoji: "🗃️", label: "Stock" },
     { key: "expenses", emoji: "💸", label: "Expenses" },
     { key: "promo", emoji: "🎟️", label: "Promo Codes" },
@@ -758,7 +767,6 @@ export default function App() {
             {view === "pos" && <POSView categories={categories} items={items} setItems={setItems} orders={orders} setOrders={setOrders} demoMode={demoMode} />}
             {view === "menu" && <MenuView categories={categories} setCategories={setCategories} items={items} setItems={setItems} config={config} demoMode={demoMode} />}
             {view === "orders" && <OrdersView orders={orders} setOrders={setOrders} />}
-            {view === "riderScanner" && <RiderScannerView orders={orders} setOrders={setOrders} />}
             {view === "stock" && <StockView items={items} setItems={setItems} demoMode={demoMode} />}
             {view === "statistics" && <StatisticsView demoMode={demoMode} />}
             {view === "voidRefund" && <VoidRefundView orders={orders} setOrders={setOrders} config={config} demoMode={demoMode} />}

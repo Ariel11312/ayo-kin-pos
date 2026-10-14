@@ -4,7 +4,7 @@ import POS from "./components/POS";
 import LoginView from './components/Views/LoginView';
 import ProtectedRoute from './components/ProtectedRoute';
 import EmployeeClockPage from "./components/EmployeePhoneClock";
-
+import RiderScannerPage from "./components/Views/RiderScanView";
 
 const App = () => {
   return (
@@ -16,6 +16,14 @@ const App = () => {
           element={
             <ProtectedRoute>
               <POS />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/rider"
+          element={
+            <ProtectedRoute>
+              <RiderScannerPage />
             </ProtectedRoute>
           }
         />

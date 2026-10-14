@@ -32,9 +32,16 @@ const STATUS_META = {
 const STATUS_KEYS = ["pending", "paid", "overdue"];
 
 const CATEGORY_OPTIONS = [
-  "Rent", "Utilities", "Salaries", "Supplies", "Ingredients",
+  "Rent", "Utilities", "Salaries", "Cash Advance", "Supplies", "Ingredients",
   "Maintenance", "Marketing", "Transportation", "Equipment", "Other",
 ];
+
+// Matches "Cash Advance", "Cash advance", "C.a", "CA" (older entries too)
+const isCashAdvance = (cat) => /^(cash\s*advance|c\.?\s*a\.?)$/i.test((cat || "").trim());
+
+// Employee table field names can vary, so try the common ones.
+const employeeName = (emp) =>
+  emp?.name || emp?.full_name || [emp?.first_name, emp?.last_name].filter(Boolean).join(" ") || "Employee";
 
 const PAYMENT_METHODS = ["Cash", "GCash", "Bank Transfer", "Card", "Other"];
 
@@ -52,6 +59,8 @@ const todayISO = () => {
 const EMPTY_FORM = {
   date: todayISO(),
   category: "",
+  employee_id: "",
+  employee_name: "",
   description: "",
   payment_method: "Cash",
   status: "pending",
@@ -248,6 +257,27 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
 
   const orders = ownOrders !== null ? ownOrders : ordersProp;
 
+  // ── Employees (for the Cash Advance picker) ─────────────
+  const [employees, setEmployees] = useState([]);
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase.from("employees").select("*");
+      if (!error && data) {
+        setEmployees(data.filter((e) => e.active !== false && e.is_active !== false));
+      }
+    })();
+  }, []);
+  const employeeById = useMemo(() => {
+    const map = {};
+    employees.forEach((e) => { map[String(e.id)] = e; });
+    return map;
+  }, [employees]);
+
+  // Name to show for an expense: live employee record first, saved name as fallback
+  const expenseEmployee = (e) =>
+    (e.employee_id && employeeById[String(e.employee_id)] ? employeeName(employeeById[String(e.employee_id)]) : "") ||
+    e.employee_name || "";
+
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
@@ -410,6 +440,8 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
     setForm({
       date: expense.date || todayISO(),
       category: expense.category || "",
+      employee_id: expense.employee_id != null ? String(expense.employee_id) : "",
+      employee_name: expense.employee_name || "",
       description: expense.description || "",
       payment_method: expense.payment_method || "Cash",
       status: expense.status || "pending",
@@ -428,7 +460,12 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
 
   const saveExpense = async () => {
     if (!form.category.trim()) return setFormErr("Category is required.");
-    if (!form.description.trim()) return setFormErr("Description is required.");
+    const needsEmployee = isCashAdvance(form.category);
+    const emp = employeeById[String(form.employee_id)];
+    const empName = emp ? employeeName(emp) : form.employee_name.trim();
+    if (needsEmployee && !empName) return setFormErr("Select who took the cash advance.");
+    const description = form.description.trim() || (needsEmployee ? `Cash advance — ${empName}` : "");
+    if (!description) return setFormErr("Description is required.");
     const amt = parseFloat(form.amount);
     if (!form.amount || isNaN(amt) || amt <= 0) return setFormErr("Enter a valid amount greater than 0.");
     if (!form.date) return setFormErr("Date is required.");
@@ -439,7 +476,9 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
       const payload = {
         date: form.date,
         category: form.category.trim(),
-        description: form.description.trim(),
+        employee_id: needsEmployee && form.employee_id ? form.employee_id : null,
+        employee_name: needsEmployee ? empName : null,
+        description,
         payment_method: form.payment_method,
         status: form.status,
         amount: amt,
@@ -694,7 +733,9 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 800, fontSize: 14, color: TEXT, wordBreak: "break-word" }}>{e.description}</div>
-                    <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>{e.category}</div>
+                    <div style={{ fontSize: 11, color: MUTED, marginTop: 2 }}>
+                      {e.category}{expenseEmployee(e) ? ` · ${expenseEmployee(e)}` : ""}
+                    </div>
                   </div>
                   <StatusPill status={e.status} />
                 </div>
@@ -744,7 +785,12 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
                     <td style={{ padding: "10px 14px", whiteSpace: "nowrap", color: MUTED }}>
                       {formatExpenseDate(e.date)}
                     </td>
-                    <td style={{ padding: "10px 14px", fontWeight: 700 }}>{e.category}</td>
+                    <td style={{ padding: "10px 14px", fontWeight: 700 }}>
+                      {e.category}
+                      {expenseEmployee(e) && (
+                        <div style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>{expenseEmployee(e)}</div>
+                      )}
+                    </td>
                     <td style={{ padding: "10px 14px", maxWidth: 260 }}>
                       <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.description}>{e.description}</div>
                       {e.notes && <div style={{ fontSize: 11, color: MUTED, fontStyle: "italic", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={e.notes}>{e.notes}</div>}
@@ -798,13 +844,38 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
             </h3>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {/* Type: Regular expense or Cash Advance */}
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "block" }}>Type</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  {[
+                    { key: "regular", label: "Regular Expense", active: !isCashAdvance(form.category) },
+                    { key: "ca",      label: "💸 Cash Advance",  active: isCashAdvance(form.category) },
+                  ].map((t) => (
+                    <button key={t.key}
+                      onClick={() => setForm((f) => t.key === "ca"
+                        ? { ...f, category: "Cash Advance", payment_method: "Cash" }
+                        : { ...f, category: isCashAdvance(f.category) ? "" : f.category, employee_id: "", employee_name: "" })}
+                      style={{
+                        padding: isMobile ? "11px 6px" : "9px 6px", borderRadius: 8, cursor: "pointer",
+                        border: `2px solid ${t.active ? DR : BORDER}`,
+                        background: t.active ? DR_LIGHT : "#fff",
+                        fontFamily: FONT, fontSize: 12, fontWeight: 700, color: t.active ? DR : MUTED,
+                      }}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Date */}
               <div>
                 <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5, display: "block" }}>Date</label>
                 <input type="date" value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} style={modalInput} />
               </div>
 
-              {/* Category */}
+              {/* Category (hidden for Cash Advance — it's set automatically) */}
+              {!isCashAdvance(form.category) && (
               <div>
                 <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5, display: "block" }}>Category</label>
                 <input
@@ -818,6 +889,41 @@ export default function ExpensesView({ orders: ordersProp = [] }) {
                   {CATEGORY_OPTIONS.map((c) => <option key={c} value={c} />)}
                 </datalist>
               </div>
+              )}
+
+              {/* Employee (only for Cash Advance) */}
+              {isCashAdvance(form.category) && (
+                <div>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 5, display: "block" }}>Who took the cash advance?</label>
+                  {employees.length > 0 ? (
+                    <select
+                      value={form.employee_id}
+                      onChange={(e) => setForm((f) => ({ ...f, employee_id: e.target.value }))}
+                      style={{ ...modalInput, cursor: "pointer" }}
+                    >
+                      <option value="">Select employee…</option>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={String(emp.id)}>{employeeName(emp)}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <>
+                      <input
+                        value={form.employee_name}
+                        onChange={(e) => setForm((f) => ({ ...f, employee_name: e.target.value }))}
+                        placeholder="Type employee name"
+                        style={modalInput}
+                      />
+                      <div style={{ fontSize: 11, color: "#B7770D", marginTop: 4 }}>
+                        Couldn't load the employee list, so type the name instead.
+                      </div>
+                    </>
+                  )}
+                  <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
+                    This amount will be deducted from the employee's salary.
+                  </div>
+                </div>
+              )}
 
               {/* Description */}
               <div>

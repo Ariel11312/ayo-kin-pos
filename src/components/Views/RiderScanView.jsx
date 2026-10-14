@@ -51,6 +51,14 @@ const fmtTime = (iso) => {
   }
 };
 
+// Status / payment values can come back with inconsistent casing or spacing,
+// so normalize before comparing ("pay_later", "Pay Later", "pay-later" ...).
+const norm = (v) => (v || "").toString().trim().toLowerCase().replace(/[\s-]+/g, "_");
+const isPending = (o) => norm(o?.status) === "pending";
+const isCompletedOrder = (o) => norm(o?.status) === "completed";
+const isPayLaterOrder = (o) => norm(o?.payment_method) === "pay_later";
+const isPickupDelivery = (o) => norm(o?.type) === "pickup_delivery";
+
 let qrScanInstanceCounter = 0;
 let cameraReleaseChain = Promise.resolve();
 
@@ -338,7 +346,7 @@ function PayLaterDetailModal({ order, onClose, onMarkPaid, isMobile }) {
           background: SUBTLE, borderRadius: 8, padding: "10px 12px", lineHeight: 1.7,
         }}>
           <div><strong>Customer:</strong> {order.customer_name || "—"}</div>
-          <div><strong>Type:</strong> {order.type === "pickup_delivery" ? "Pickup & Delivery" : "Walk-in"}</div>
+          <div><strong>Type:</strong> {isPickupDelivery(order) ? "Pickup & Delivery" : "Walk-in"}</div>
           <div><strong>Total:</strong> {fmt(order.total)}</div>
           <div><strong>Placed:</strong> {fmtTime(order.created_at)}</div>
         </div>
@@ -453,7 +461,7 @@ function ConfirmPaymentModal({ order, onClose, onConfirm, busy }) {
   );
 }
 
-export default function RiderScannerView({ orders, setOrders }) {
+export default function RiderScannerView({ orders: ordersProp = [], setOrders: setOrdersProp }) {
   const [scanMode, setScanMode] = useState(null);
   const [selected, setSelected] = useState(null);
   const [selectedPayLater, setSelectedPayLater] = useState(null);
@@ -463,6 +471,61 @@ export default function RiderScannerView({ orders, setOrders }) {
   // Which Pay Later order is being confirmed (Cash vs GCash).
   const [confirmingPay, setConfirmingPay] = useState(null);
 
+  // ── Orders: fetched directly (+ realtime) instead of trusting the
+  // parent's "orders" prop. On the standalone /rider route that prop is
+  // empty/stale, which is why both lists showed "No pending ..." even
+  // though the database has pending orders.
+  const [ownOrders, setOwnOrders] = useState(null); // null = not loaded yet
+  const [ordersError, setOrdersError] = useState(null);
+
+  async function fetchOrders() {
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setOrdersError(null);
+      setOwnOrders(data || []);
+    } catch (e) {
+      setOrdersError(e.message);
+      setOwnOrders((prev) => prev ?? []);
+    }
+  }
+
+  useEffect(() => {
+    fetchOrders();
+
+    const channel = supabase
+      .channel("orders-live-rider")
+      .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, (payload) => {
+        const { eventType, new: newRow, old: oldRow } = payload;
+        setOwnOrders((prev) => {
+          const list = prev || [];
+          if (eventType === "INSERT") {
+            if (list.some((o) => o.id === newRow.id)) return list;
+            return [newRow, ...list];
+          }
+          if (eventType === "UPDATE") return list.map((o) => (o.id === newRow.id ? { ...o, ...newRow } : o));
+          if (eventType === "DELETE") return list.filter((o) => o.id !== oldRow.id);
+          return list;
+        });
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
+  // Prefer the freshly-fetched orders; fall back to the prop until loaded.
+  const orders = ownOrders !== null ? ownOrders : (ordersProp || []);
+
+  // Keep local list (and the parent's, if it passed a setter) in sync after an update.
+  const applyOrderUpdate = (orderId, updatedRow) => {
+    const merge = (prev) => (prev || []).map((o) => (o.id === orderId ? { ...o, ...updatedRow } : o));
+    setOwnOrders(merge);
+    if (typeof setOrdersProp === "function") setOrdersProp(merge);
+  };
+
   const showToast = (msg, type = "warn") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2600);
@@ -470,16 +533,16 @@ export default function RiderScannerView({ orders, setOrders }) {
 
   const pending = useMemo(
     () =>
-      (orders || [])
-        .filter(o => o.type === "pickup_delivery" && o.status === "pending")
+      orders
+        .filter(o => isPickupDelivery(o) && isPending(o))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
     [orders]
   );
 
   const pendingPayLater = useMemo(
     () =>
-      (orders || [])
-        .filter(o => o.payment_method === "pay_later" && o.status === "pending")
+      orders
+        .filter(o => isPayLaterOrder(o) && isPending(o))
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)),
     [orders]
   );
@@ -487,7 +550,7 @@ export default function RiderScannerView({ orders, setOrders }) {
   const markDelivered = async (orderId) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
-    if (order.status === "completed") { showToast(`Order ${orderId} is already delivered.`, "warn"); return; }
+    if (isCompletedOrder(order)) { showToast(`Order ${orderId} is already delivered.`, "warn"); return; }
 
     setBusyId(orderId);
 
@@ -505,8 +568,7 @@ export default function RiderScannerView({ orders, setOrders }) {
       return;
     }
 
-    const updatedRow = data[0];
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updatedRow } : o));
+    applyOrderUpdate(orderId, data[0]);
     setSelected(null);
     showToast(`Order ${orderId} marked as delivered.`, "warn");
   };
@@ -516,10 +578,10 @@ export default function RiderScannerView({ orders, setOrders }) {
   const markPaid = async (orderId, choice = null) => {
     const order = orders.find(o => o.id === orderId);
     if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
-    if (order.payment_method !== "pay_later") {
+    if (!isPayLaterOrder(order)) {
       showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return;
     }
-    if (order.status === "completed") { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
+    if (isCompletedOrder(order)) { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
 
     setBusyId(orderId);
 
@@ -544,8 +606,7 @@ export default function RiderScannerView({ orders, setOrders }) {
       return;
     }
 
-    const updatedRow = data[0];
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updatedRow } : o));
+    applyOrderUpdate(orderId, data[0]);
     setSelectedPayLater(null);
     setConfirmingPay(null);
     showToast(`Order ${orderId} marked as paid.`, "warn");
@@ -558,8 +619,8 @@ export default function RiderScannerView({ orders, setOrders }) {
 
     const order = orders.find(o => o.id === orderId);
     if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
-    if (order.type !== "pickup_delivery") { showToast(`Order ${orderId} isn't a Pickup & Delivery order.`, "err"); return; }
-    if (order.status === "completed") { showToast(`Order ${orderId} is already marked delivered.`, "warn"); return; }
+    if (!isPickupDelivery(order)) { showToast(`Order ${orderId} isn't a Pickup & Delivery order.`, "err"); return; }
+    if (isCompletedOrder(order)) { showToast(`Order ${orderId} is already marked delivered.`, "warn"); return; }
 
     markDelivered(orderId);
   };
@@ -571,8 +632,8 @@ export default function RiderScannerView({ orders, setOrders }) {
 
     const order = orders.find(o => o.id === orderId);
     if (!order) { showToast(`Order ${orderId} not found.`, "err"); return; }
-    if (order.payment_method !== "pay_later") { showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return; }
-    if (order.status === "completed") { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
+    if (!isPayLaterOrder(order)) { showToast(`Order ${orderId} isn't a Pay Later order.`, "err"); return; }
+    if (isCompletedOrder(order)) { showToast(`Order ${orderId} is already marked as paid.`, "warn"); return; }
 
     // Open the Cash/GCash picker instead of silently marking it paid.
     setConfirmingPay(order);
@@ -581,6 +642,19 @@ export default function RiderScannerView({ orders, setOrders }) {
   return (
     <div style={{ height: "100%", overflowY: "auto", boxSizing: "border-box" }}>
     <div style={{ fontFamily: FONT, padding: 20, paddingBottom: 60, maxWidth: 760, margin: "0 auto" }}>
+
+      {ordersError && (
+        <div style={{ background: "#FDECEA", color: "#C0392B", padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, marginBottom: 12 }}>
+          ⚠ Couldn't load orders: {ordersError}{" "}
+          <button onClick={fetchOrders} style={{ marginLeft: 8, border: "none", background: "none", color: "#C0392B", fontWeight: 800, cursor: "pointer", textDecoration: "underline", fontFamily: FONT }}>
+            Retry
+          </button>
+        </div>
+      )}
+      {!ordersError && ownOrders === null && (
+        <div style={{ color: MUTED, fontSize: 12, marginBottom: 12 }}>Loading orders…</div>
+      )}
+
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4, flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 800, color: TEXT }}>Rider Scanner</div>
@@ -625,6 +699,14 @@ export default function RiderScannerView({ orders, setOrders }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 800, color: TEXT }}>
                   {o.id} <span style={{ color: MUTED, fontWeight: 600 }}>· {fmt(o.total)}</span>
+                  {isPayLaterOrder(o) && (
+                    <span style={{
+                      marginLeft: 8, fontSize: 10, fontWeight: 800, color: DR, background: DR_LIGHT,
+                      borderRadius: 20, padding: "1px 8px", verticalAlign: "middle",
+                    }}>
+                      UNPAID
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: 12, color: TEXT, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {o.customer_name || "—"}
@@ -682,7 +764,7 @@ export default function RiderScannerView({ orders, setOrders }) {
                   </span>
                 </div>
                 <div style={{ fontSize: 12, color: TEXT, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {o.customer_name || "—"} <span style={{ color: MUTED }}>· {o.type === "pickup_delivery" ? "Pickup & Delivery" : "Walk-in"}</span>
+                  {o.customer_name || "—"} <span style={{ color: MUTED }}>· {isPickupDelivery(o) ? "Pickup & Delivery" : "Walk-in"}</span>
                 </div>
                 <div style={{ fontSize: 10, color: MUTED, marginTop: 2 }}>Placed {fmtTime(o.created_at)}</div>
               </div>
