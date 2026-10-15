@@ -3,12 +3,16 @@ import fmt from "./fmt";
 import Btn from "./btn";
 import { ErrBox, OkBox } from "./messageBox";
 import Field from "./field";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { QRCodeCanvas } from "qrcode.react";
+import { printThermal } from "../components/utils/printThermal";
 
-// Local id helper (was referenced below but never defined/imported, which
-// threw a ReferenceError on GCash payments without a reference number).
+// Local id helper
 const genId = () => Math.random().toString(36).substring(2, 8).toUpperCase();
+
+// Escape text before putting it into the print HTML
+const esc = (v) =>
+  String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 export default function Modal({ title, onClose, children, width = 480 }) {
   return (
@@ -23,13 +27,12 @@ export default function Modal({ title, onClose, children, width = 480 }) {
     </div>
   );
 }
-export function ReceiptModal({ order, onClose }) {
-  const handlePrint = () => window.print();
 
-  // Pickup & Delivery orders carry a rider QR right on the receipt, so the
-  // same slip that's handed to the customer can be scanned by the rider
-  // (via the Rider Scanner view) to close out the order. Encodes the same
-  // plain-text payload the POS's rider QR modal uses.
+export function ReceiptModal({ order, onClose }) {
+  const payLaterQrRef = useRef(null);
+  const riderQrRef = useRef(null);
+
+  // Pickup & Delivery orders carry a rider QR on the receipt.
   const isPickupDelivery = order.type === "pickup_delivery";
   const riderPayload = [
     `Order ID: ${order.id}`,
@@ -37,51 +40,90 @@ export function ReceiptModal({ order, onClose }) {
     `Address: ${order.delivery_address || "—"}`,
   ].join("\n");
 
-  // Pay Later orders carry their own QR — scanning it (via POSView's
-  // "Confirm Pay Later" scanner) flips the order from pending to completed
-  // once the customer actually settles up. Kept in a simple, distinct
-  // "PAYLATER-CONFIRM:<id>" format so it can never be mistaken for the
-  // rider-slip payload above, even if both were somehow printed together.
+  // Pay Later orders carry a QR that confirms payment when scanned.
   const isPayLater = order.payment_method === "pay_later";
   const payLaterPayload = `PAYLATER-CONFIRM:${order.id}`;
 
   // Paid/unpaid depends on the PAYMENT, never on the delivery status.
-  // A Pickup & Delivery order paid by Cash/GCash is PAID even though its
-  // status stays "pending" until the rider delivers it.
   const isPaid = !isPayLater;
+
+  // Grab the rendered QR canvas as an image for printing
+  const qrDataUrl = (ref) => {
+    try {
+      return ref.current?.querySelector("canvas")?.toDataURL("image/png") || "";
+    } catch {
+      return "";
+    }
+  };
+
+  // Build a clean 58mm receipt straight from the order data
+  const buildReceiptHtml = () => {
+    const items = Array.isArray(order.items) ? order.items : [];
+    const itemsHtml = items.map((item) => `
+      <div style="margin-bottom:4px">
+        <div class="bold">${esc(item.name)}</div>
+        <div class="row small">
+          <span>${esc(item.qty)} x ${esc(fmt(item.price))}</span>
+          <span>${esc(fmt(item.price * item.qty))}</span>
+        </div>
+      </div>`).join("");
+
+    const typeLabel = (order.type || "").replace(/_/g, " ");
+    const paymentLabel = isPayLater ? "Pay Later" : (order.payment_method || "");
+
+    const payLaterQr = isPayLater ? qrDataUrl(payLaterQrRef) : "";
+    const riderQr = isPickupDelivery ? qrDataUrl(riderQrRef) : "";
+
+    return `
+      <h2 style="font-size:14px">Bula-On Laundry Shop</h2>
+      <div class="center small">Official Receipt</div>
+      <div class="center small">${esc(new Date(order.created_at).toLocaleString("en-PH"))}</div>
+      <div class="line"></div>
+
+      <div><span class="bold">Order:</span> ${esc(order.id)}</div>
+      ${typeLabel ? `<div style="text-transform:capitalize">${esc(typeLabel)}</div>` : ""}
+      ${order.customer_name ? `<div><span class="bold">Customer:</span> ${esc(order.customer_name)}</div>` : ""}
+      ${order.table_no ? `<div><span class="bold">Table:</span> ${esc(order.table_no)}</div>` : ""}
+      ${order.delivery_address ? `<div><span class="bold">Address:</span> ${esc(order.delivery_address)}</div>` : ""}
+
+      <div class="line"></div>
+      ${itemsHtml}
+      <div class="line"></div>
+
+      <div class="row"><span>Subtotal</span><span>${esc(fmt(order.subtotal ?? order.total))}</span></div>
+      ${order.discount > 0 ? `<div class="row"><span>Discount</span><span>- ${esc(fmt(order.discount))}</span></div>` : ""}
+      <div class="solid"></div>
+      <div class="row bold" style="font-size:14px"><span>TOTAL</span><span>${esc(fmt(order.total))}</span></div>
+
+      <div style="margin-top:8px">
+        <div>Payment: <span class="bold" style="text-transform:uppercase">${esc(paymentLabel)}</span></div>
+        ${isPayLater ? `<div class="bold">** UNPAID - Pending payment **</div>` : ""}
+        ${isPaid ? `<div class="bold">PAID${order.paid_at ? ` - ${esc(new Date(order.paid_at).toLocaleString("en-PH"))}` : ""}</div>` : ""}
+        ${isPaid && isPickupDelivery && order.status === "pending" ? `<div>Awaiting delivery</div>` : ""}
+        ${order.payment_ref ? `<div>Ref No: ${esc(order.payment_ref)}</div>` : ""}
+      </div>
+
+      ${payLaterQr ? `
+        <div class="line"></div>
+        <img class="qr" src="${payLaterQr}" alt="QR" />
+        <div class="center small">Scan at the counter to confirm payment received</div>` : ""}
+
+      ${riderQr ? `
+        <div class="line"></div>
+        <img class="qr" src="${riderQr}" alt="QR" />
+        <div class="center small">Scan for rider pickup &amp; delivery</div>` : ""}
+
+      <div class="line"></div>
+      <div class="center small">- Thank you! Please come again. -</div>
+    `;
+  };
+
+  const handlePrint = () =>
+    printThermal(buildReceiptHtml(), { title: `Receipt ${order.id}` });
 
   return (
     <Modal title="Receipt" onClose={onClose} width={380}>
-      <style>{`
-        @media print {
-          @page {
-            margin: 0;
-            size: auto;
-          }
-          html, body {
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow: visible !important;
-          }
-          body * {
-            visibility: hidden;
-          }
-          #receipt-print, #receipt-print * {
-            visibility: visible;
-          }
-          #receipt-print {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 380px;
-            margin: 0 auto;
-            padding: 24px;
-            box-sizing: border-box;
-            background: #fff;
-          }
-        }
-      `}</style>
-
+      {/* On-screen preview only. Printing uses buildReceiptHtml(). */}
       <div id="receipt-print" style={{ padding: 24, fontFamily: '"Courier New", monospace', fontSize: 13, lineHeight: 1.6 }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
           <div style={{ fontWeight: 700, fontSize: 18, fontFamily: FONT, letterSpacing: -0.5 }}>Bula-On Laundry Shop</div>
@@ -98,7 +140,7 @@ export function ReceiptModal({ order, onClose }) {
         {order.delivery_address && <div style={{ fontSize: 12, marginBottom: 4 }}><b>Address:</b> {order.delivery_address}</div>}
 
         <div style={{ borderTop: "1px dashed #bbb", borderBottom: "1px dashed #bbb", padding: "12px 0", margin: "14px 0" }}>
-          {order.items.map((item, i) => (
+          {(order.items || []).map((item, i) => (
             <div key={i} style={{ display: "flex", justifyContent: "space-between", marginBottom: 7 }}>
               <div>
                 <div style={{ fontWeight: 600 }}>{item.name}</div>
@@ -110,7 +152,7 @@ export function ReceiptModal({ order, onClose }) {
         </div>
 
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-          <span style={{ color: MUTED }}>Subtotal</span><span>{fmt(order.subtotal)}</span>
+          <span style={{ color: MUTED }}>Subtotal</span><span>{fmt(order.subtotal ?? order.total)}</span>
         </div>
         {order.discount > 0 && (
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, color: DR }}>
@@ -143,11 +185,11 @@ export function ReceiptModal({ order, onClose }) {
 
         {isPayLater && (
           <div style={{ textAlign: "center", marginTop: 18 }}>
-            <div style={{
+            <div ref={payLaterQrRef} style={{
               display: "inline-block", padding: 8, background: "#fff",
               border: "1px solid #ddd", borderRadius: 6, lineHeight: 0,
             }}>
-              <QRCodeCanvas value={payLaterPayload} size={140} level="M" marginSize={0} />
+              <QRCodeCanvas value={payLaterPayload} size={240} level="M" marginSize={0} style={{ width: 140, height: 140 }} />
             </div>
             <div style={{ fontSize: 10, color: MUTED, marginTop: 6, fontFamily: FONT }}>
               Scan at the counter to confirm payment received
@@ -157,11 +199,11 @@ export function ReceiptModal({ order, onClose }) {
 
         {isPickupDelivery && (
           <div style={{ textAlign: "center", marginTop: 18 }}>
-            <div style={{
+            <div ref={riderQrRef} style={{
               display: "inline-block", padding: 8, background: "#fff",
               border: "1px solid #ddd", borderRadius: 6, lineHeight: 0,
             }}>
-              <QRCodeCanvas value={riderPayload} size={140} level="M" marginSize={0} />
+              <QRCodeCanvas value={riderPayload} size={240} level="M" marginSize={0} style={{ width: 140, height: 140 }} />
             </div>
             <div style={{ fontSize: 10, color: MUTED, marginTop: 6, fontFamily: FONT }}>
               Scan for rider pickup &amp; delivery
@@ -189,37 +231,23 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
   const cash = parseFloat(cashGiven) || 0;
   const change = method === "cash" ? Math.max(0, cash - total) : 0;
 
-  // GCash is always selectable (manual reference entry). Card was removed.
   const isPayLater = method === "pay_later";
 
   const handlePay = async () => {
-    // Cash is collected at the counter for EVERY order type (including
-    // Pickup & Delivery), so the order is recorded as paid right now.
     if (method === "cash" && cash < total) { setError("Cash given is less than total amount."); return; }
     if (method === "gcash" && !ref.trim() && !demoMode) { setError("GCash reference number is required."); return; }
     setLoading(true); setError("");
     try {
-      // Pay Later: no PayMongo call, no cash to record — the order is
-      // simply saved as unpaid/pending until settled later.
+      // Pay Later: saved as unpaid/pending until settled later.
       if (isPayLater) {
         await onPaid("pay_later", "");
         return;
       }
 
-      let payRef = ref.trim();
-      if (!demoMode && config?.paymongoKey && method === "gcash") {
-        const pm = await pmReq(config, "payment_intents", {
-          data: {
-            attributes: {
-              amount: Math.round(total * 100),
-              payment_method_allowed: ["gcash"],
-              currency: "PHP",
-              description: `POS Order — ${new Date().toLocaleString("en-PH")}`,
-            },
-          },
-        });
-        payRef = pm.data?.id || "";
-      }
+      // NOTE: the PayMongo call was removed. `pmReq` was never defined or
+      // imported, so it threw a ReferenceError whenever a PayMongo key was set.
+      // GCash uses the manually entered reference number instead.
+      const payRef = ref.trim();
       await onPaid(method, payRef || (method !== "cash" ? "DEMO-" + genId() : ""));
     } catch (e) {
       setError(e.message);
@@ -227,8 +255,6 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
     }
   };
 
-  // GCash is no longer locked behind a PayMongo key — the cashier can
-  // always enter a reference number manually. Card option removed.
   const methods = [
     { key: "cash",      emoji: "💵", label: "Cash",      locked: false },
     { key: "gcash",     emoji: "📱", label: "GCash",     locked: false },
@@ -313,6 +339,7 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
     </Modal>
   );
 }
+
 export function ConfirmModal({ title = "Are you sure?", message, confirmLabel = "Confirm", danger = false, onClose, onConfirm }) {
   const [loading, setLoading] = useState(false);
 
@@ -345,13 +372,13 @@ export function SuccessModal({ title = "Success", message, onClose }) {
   return (
     <Modal title="" onClose={onClose} width={340}>
       <div style={{ padding: "32px 24px 24px", textAlign: "center" }}>
-<div style={{ marginBottom: 12 }}>
-  <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="28" cy="28" r="28" fill="#D1FAE5" />
-    <circle cx="28" cy="28" r="20" fill="#10B981" />
-    <polyline points="18,28 25,35 38,21" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-</div>
+        <div style={{ marginBottom: 12 }}>
+          <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="28" cy="28" r="28" fill="#D1FAE5" />
+            <circle cx="28" cy="28" r="20" fill="#10B981" />
+            <polyline points="18,28 25,35 38,21" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
         <div style={{ fontWeight: 800, fontSize: 17, marginBottom: 8, fontFamily: FONT }}>{title}</div>
         <p style={{ margin: "0 0 24px", fontSize: 14, color: MUTED, lineHeight: 1.6 }}>{message}</p>
         <Btn onClick={onClose} style={{ width: "100%" }}>Done</Btn>

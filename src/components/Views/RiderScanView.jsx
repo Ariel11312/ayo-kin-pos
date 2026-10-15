@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { Html5Qrcode } from "html5-qrcode";
 import { QRCodeCanvas } from "qrcode.react";
 import { BG, BORDER, DR, DR_LIGHT, FONT, MUTED, SUBTLE, TEXT } from "../../ui/styles";
@@ -461,7 +462,35 @@ function ConfirmPaymentModal({ order, onClose, onConfirm, busy }) {
   );
 }
 
+/* ─────────────────────────────────────────────
+   Logout Confirm Modal
+───────────────────────────────────────────── */
+function LogoutConfirmModal({ onClose, onConfirm, busy }) {
+  return (
+    <div style={modalOverlay} onClick={() => !busy && onClose()}>
+      <div style={modalBox(false, 340, 24)} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: TEXT, marginBottom: 8 }}>
+          Log out?
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5, marginBottom: 20 }}>
+          Are you sure you want to log out? You'll need to sign in again to scan orders.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn variant="ghost" onClick={onClose} disabled={busy} style={{ flex: 1, padding: "10px 0" }}>
+            Cancel
+          </Btn>
+          <Btn onClick={onConfirm} disabled={busy} style={{ flex: 1, padding: "10px 0" }}>
+            {busy ? "Logging out…" : "Log out"}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RiderScannerView({ orders: ordersProp = [], setOrders: setOrdersProp }) {
+  const navigate = useNavigate();
+
   const [scanMode, setScanMode] = useState(null);
   const [selected, setSelected] = useState(null);
   const [selectedPayLater, setSelectedPayLater] = useState(null);
@@ -470,6 +499,18 @@ export default function RiderScannerView({ orders: ordersProp = [], setOrders: s
 
   // Which Pay Later order is being confirmed (Cash vs GCash).
   const [confirmingPay, setConfirmingPay] = useState(null);
+
+  // ── Logout ──
+  const [showLogout, setShowLogout] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    await supabase.auth.signOut();
+    setLoggingOut(false);
+    setShowLogout(false);
+    navigate("/", { replace: true });
+  }
 
   // ── Orders: fetched directly (+ realtime) instead of trusting the
   // parent's "orders" prop. On the standalone /rider route that prop is
@@ -662,12 +703,15 @@ export default function RiderScannerView({ orders: ordersProp = [], setOrders: s
             Scan a delivery slip to mark it delivered, scan a Pay Later receipt to confirm payment, or complete one manually below.
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
           <Btn onClick={() => setScanMode("rider")} style={{ padding: "10px 18px" }}>
             📷 Scan rider QR
           </Btn>
           <Btn variant="ghost" onClick={() => setScanMode("paylater")} style={{ padding: "10px 18px" }}>
             🕒 Scan Pay Later
+          </Btn>
+          <Btn variant="ghost" onClick={() => setShowLogout(true)} style={{ padding: "10px 18px" }}>
+            ↪ Log out
           </Btn>
         </div>
       </div>
@@ -824,6 +868,15 @@ export default function RiderScannerView({ orders: ordersProp = [], setOrders: s
           busy={busyId === confirmingPay.id}
           onClose={() => setConfirmingPay(null)}
           onConfirm={(choice) => markPaid(confirmingPay.id, choice)}
+        />
+      )}
+
+      {/* Logout confirm modal */}
+      {showLogout && (
+        <LogoutConfirmModal
+          busy={loggingOut}
+          onClose={() => setShowLogout(false)}
+          onConfirm={handleLogout}
         />
       )}
 

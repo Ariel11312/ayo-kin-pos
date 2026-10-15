@@ -6,6 +6,7 @@ import { getItems } from "./data/items"
 import { getOrders } from "./data/orders"
 import { DR, BG, TEXT, MUTED, BORDER, SUCCESS, FONT } from "../ui/styles"
 import fmt from "../function/fmt"
+import { getRole } from "./utils/roles";
 import POSView from "./Views/POSView";
 import MenuView from "./Views/MenuView";
 import OrdersView from "./Views/OrderView";
@@ -186,9 +187,9 @@ function PowerBadge({ size }) {
   );
 }
 
-/* ───────────────────────── App ───────────────────────── */
+/* ───────────────────────── POS shell (the real app) ───────────────────────── */
 
-export default function POS() {
+function POSShell() {
   const navigate = useNavigate();
   const [view, setView] = useState(() => {
     const saved = localStorage.getItem("pos_view");
@@ -860,4 +861,36 @@ export default function POS() {
       )}
     </div>
   );
+}
+
+/* ───────────────────────── Role guard ─────────────────────────
+   Ang POSShell (at ang lahat ng data fetch nito) ay hindi magma-mount
+   hangga't hindi kumpirmadong staff/admin ang user. Ang rider ay
+   ire-redirect sa /rider at walang makikitang POS data. */
+
+export default function POS() {
+  const navigate = useNavigate();
+  const [allowed, setAllowed] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    // getUser() = fresh mula sa server, hindi cached na session
+    supabase.auth.getUser().then(({ data, error }) => {
+      if (!mounted) return;
+
+      const role = getRole(data?.user);
+
+      if (error || !["staff", "admin"].includes(role)) {
+        navigate(role === "rider" ? "/rider" : "/", { replace: true });
+        return;
+      }
+
+      setAllowed(true);
+    });
+
+    return () => { mounted = false; };
+  }, [navigate]);
+
+  return allowed ? <POSShell /> : null;
 }

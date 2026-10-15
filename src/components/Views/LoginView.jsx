@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../../supabase/supabase";
 import { useNavigate } from "react-router-dom";
+import { getRole, homeFor } from "../utils/roles";
 
 // — styles.js tokens (inline for portability) —
 const DR       = "#247494";
@@ -143,17 +144,23 @@ export default function LoginView() {
   const [focusedField, setFocusedField] = useState(null);
   const navigate = useNavigate();
 
-  // If already logged in, skip the login form entirely.
+  // If already logged in, skip the login form and go to the page for their role.
   useEffect(() => {
     let mounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return;
+
       if (data.session) {
-        navigate("/pos", { replace: true });
-      } else {
-        setCheckingSession(false);
+        const role = getRole(data.session.user);
+        if (role) {
+          navigate(homeFor(role), { replace: true });
+          return;
+        }
+        // Naka-login pero walang role: ipakita ang login form (iwas redirect loop)
       }
+
+      setCheckingSession(false);
     });
 
     return () => { mounted = false; };
@@ -164,19 +171,29 @@ export default function LoginView() {
     setError("");
     setLoading(true);
 
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    setLoading(false);
-
     if (authError) {
+      setLoading(false);
       setError(authError.message);
       return; // don't redirect on failed login
     }
 
-    navigate("/pos", { replace: true });
+    const role = getRole(data.user);
+
+    // Walang role ang account -> huwag papasukin
+    if (!role) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError("Your account has no role assigned. Contact your store manager.");
+      return;
+    }
+
+    setLoading(false);
+    navigate(homeFor(role), { replace: true });
   }
 
   // Avoid flashing the login form while we check for an existing session.
