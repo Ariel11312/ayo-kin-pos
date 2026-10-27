@@ -222,7 +222,16 @@ export function ReceiptModal({ order, onClose }) {
   );
 }
 
-export function PaymentModal({ total, config, demoMode, orderType, onClose, onPaid }) {
+/* ─────────────────────────────────────────────
+   PaymentModal
+
+   Props:
+   - missingInfo: true when the order is Pickup & Delivery and the customer
+     name / 10-digit contact / address aren't complete yet. The payment
+     options (Cash / GCash / Pay Later) are ALWAYS shown; while this is
+     true we show a warning and keep the Confirm button disabled.
+───────────────────────────────────────────── */
+export function PaymentModal({ total, config, demoMode, orderType, missingInfo = false, onClose, onPaid }) {
   const [method, setMethod] = useState("cash");
   const [cashGiven, setCashGiven] = useState("");
   const [ref, setRef] = useState("");
@@ -234,6 +243,10 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
   const isPayLater = method === "pay_later";
 
   const handlePay = async () => {
+    if (missingInfo) {
+      setError("Complete the customer name, 10-digit contact number and address first.");
+      return;
+    }
     if (method === "cash" && cash < total) { setError("Cash given is less than total amount."); return; }
     if (method === "gcash" && !ref.trim() && !demoMode) { setError("GCash reference number is required."); return; }
     setLoading(true); setError("");
@@ -293,6 +306,18 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
           <span style={{ fontSize: 24, fontWeight: 700, color: DR }}>{fmt(total)}</span>
         </div>
 
+        {/* Pickup & Delivery: details still incomplete. Options stay visible,
+            but Confirm is disabled until the cashier fills them in. */}
+        {missingInfo && (
+          <div style={{
+            marginBottom: 16, padding: "12px 16px", borderRadius: 8,
+            background: DR_LIGHT, color: DR, fontSize: 13, fontWeight: 600, lineHeight: 1.5,
+          }}>
+            ⚠ Pickup &amp; Delivery needs the customer's name, a 10-digit contact number and an address.
+            Close this window, fill them in, then pay.
+          </div>
+        )}
+
         {isPayLater && (
           <div style={{
             display: "flex", alignItems: "center", gap: 8, marginBottom: 18, padding: "12px 16px",
@@ -331,7 +356,8 @@ export function PaymentModal({ total, config, demoMode, orderType, onClose, onPa
 
         <div style={{ display: "flex", gap: 10 }}>
           <Btn variant="ghost" onClick={onClose} style={{ flex: 1 }} disabled={loading}>Cancel</Btn>
-          <Btn onClick={handlePay} style={{ flex: 2 }} disabled={loading || (method === "cash" && cash < total)}>
+          <Btn onClick={handlePay} style={{ flex: 2 }}
+            disabled={loading || missingInfo || (method === "cash" && cash < total)}>
             {loading ? "Processing…" : isPayLater ? "Confirm Pay Later" : `Confirm ${method === "cash" ? "Cash" : method.toUpperCase()} Payment`}
           </Btn>
         </div>

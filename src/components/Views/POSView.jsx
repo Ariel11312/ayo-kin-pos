@@ -113,6 +113,9 @@ const CUSTOMER_SEARCH_MIN_CHARS = 2;
 const CUSTOMER_SEARCH_DEBOUNCE_MS = 350;
 const CUSTOMER_SEARCH_MAX_RESULTS = 6;
 
+const MISSING_DELIVERY_MSG =
+  "Customer name, a valid 10-digit contact number, and delivery address are required for Pickup & Delivery orders.";
+
 /* ─────────────────────────────────────────────
    Responsive helpers
    - useIsMobile: phone/tablet WIDTH breakpoint
@@ -598,9 +601,12 @@ export default function POSView({ categories, items, setItems, orders, setOrders
   });
 
   // Pickup & Delivery orders need a name, a full 10-digit contact number,
-  // and an address so the rider knows who/where to go — required before
-  // checkout, not just before printing. Walk-in still collects the same
-  // fields but doesn't require them.
+  // and an address so the rider knows who/where to go. The Pay button
+  // ALWAYS opens the payment modal (so Cash / GCash / Pay Later are always
+  // visible); this flag is passed down to the modal, which blocks the
+  // confirm button and shows a warning until the details are complete.
+  // handlePaid re-checks it as a last-line safeguard. Walk-in still
+  // collects the same fields but doesn't require them.
   const missingDeliveryInfo = orderType === "pickup_delivery" &&
     (!customerName.trim() || contactNumber.length !== CONTACT_DIGITS || !deliveryAddr.trim());
 
@@ -672,9 +678,12 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     showToast(`Promo "${code}" applied.`, "warn");
   };
 
-  /* Scan a rider slip's QR to mark a Pickup & Delivery order as delivered.
+  /* Scan a rider slip's QR to mark a Pickup & Delivery order as delivered
+     AND paid. The rider collects payment on delivery, so a scan completes
+     the order and stamps paid_at (unless it was already paid up front by
+     Cash/GCash, in which case the original paid_at is kept).
      Looks the order up locally first (fast, and works if the DB row is
-     mid-flight), then persists the status change to Supabase. */
+     mid-flight), then persists the change to Supabase. */
   const completeRiderOrder = async (decodedText) => {
     setModal(null);
     const orderId = parseRiderOrderId(decodedText);
@@ -688,11 +697,10 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     if (order.status === "completed") {
       showToast(`Order ${orderId} is already marked delivered.`, "warn"); return;
     }
-    // A Pay Later order that hasn't been settled can't be closed out by
-    // delivery alone — otherwise it would read "completed" while unpaid.
-    if (order.payment_method === "pay_later" && !order.paid_at) {
-      showToast(`Order ${orderId} is still unpaid (Pay Later). Confirm payment first.`, "err"); return;
-    }
+    // Scanning = delivered + paid. If the order was already paid (Cash/GCash),
+    // keep its original paid_at; otherwise (Pay Later) stamp it now.
+    const wasUnpaid = !order.paid_at;
+    const update = { status: "completed", paid_at: order.paid_at || ts() };
 
     // .select() forces Supabase to return the rows it actually touched.
     // Without it, `error` is null even when RLS silently blocks the write or
@@ -700,7 +708,7 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     // nothing changes in the database.
     const { data, error } = await supabase
       .from("orders")
-      .update({ status: "completed" })
+      .update(update)
       .eq("id", orderId)
       .select();
 
@@ -711,7 +719,12 @@ export default function POSView({ categories, items, setItems, orders, setOrders
     }
 
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...data[0] } : o));
-    showToast(`Order ${orderId} marked as delivered.`, "warn");
+    showToast(
+      wasUnpaid
+        ? `Order ${orderId} marked as delivered and paid.`
+        : `Order ${orderId} marked as delivered.`,
+      "warn"
+    );
   };
 
   /* Scan a receipt's "Pay Later" QR to confirm the customer has now paid.
@@ -865,6 +878,13 @@ export default function POSView({ categories, items, setItems, orders, setOrders
      Pay Later has no paid_at until it's settled later.
   */
   const handlePaid = async (method, ref) => {
+    // Safety net: PaymentModal already blocks confirm while details are
+    // missing, but never let an incomplete Pickup & Delivery order through.
+    // Thrown before setLoading so PaymentModal's catch shows the message.
+    if (missingDeliveryInfo) {
+      throw new Error(MISSING_DELIVERY_MSG);
+    }
+
     setLoading(true); setError("");
     try {
       const status =
@@ -1245,19 +1265,27 @@ export default function POSView({ categories, items, setItems, orders, setOrders
           </div>
         )}
 
+        {/* Heads-up shown right in the cart so the cashier knows what's still
+            needed — but it no longer blocks opening the payment options. */}
+        {missingDeliveryInfo && cart.length > 0 && (
+          <div style={{
+            background: WARNING_BG, border: `1px solid ${WARNING}`, borderRadius: 8,
+            padding: "8px 10px", marginBottom: 10, fontSize: 12, color: WARNING, fontWeight: 700,
+          }}>
+            ⚠ Pickup & Delivery needs the customer name, a 10-digit contact number and an address before you can confirm payment.
+          </div>
+        )}
+
         <ErrBox msg={error} />
         <div style={{ display: "flex", gap: 8 }}>
           <Btn variant="ghost" onClick={clearOrder}
             style={{ flexShrink: 0, padding: isMobile ? "12px 18px" : "9px 14px" }}
             disabled={cart.length === 0}>Clear</Btn>
+          {/* Always opens the payment modal (Cash / GCash / Pay Later), for
+              Walk-in AND Pickup & Delivery. Missing delivery details are
+              enforced inside the modal instead of silently blocking here. */}
           <Btn
-            onClick={() => {
-              if (missingDeliveryInfo) {
-                setError("Customer name, a valid 10-digit contact number, and delivery address are required for Pickup & Delivery orders.");
-                return;
-              }
-              setError(""); setModal("payment");
-            }}
+            onClick={() => { setError(""); setModal("payment"); }}
             style={{ flex: 1, padding: isMobile ? "12px 16px" : undefined }}
             disabled={cart.length === 0 || loading || hasOverstockedItem}>
             {loading ? "Saving…" : `Pay ${fmt(total)}`}
@@ -1527,7 +1555,8 @@ export default function POSView({ categories, items, setItems, orders, setOrders
       )}
       {modal === "payment" && (
         <PaymentModal total={total} config={config} demoMode={demoMode} isMobile={isMobile}
-          orderType={orderType} onClose={() => setModal(null)} onPaid={handlePaid} />
+          orderType={orderType} missingInfo={missingDeliveryInfo}
+          onClose={() => setModal(null)} onPaid={handlePaid} />
       )}
       {modal === "receipt" && receipt && (
         <ReceiptModal order={receipt} isMobile={isMobile} onClose={closeReceipt} />
