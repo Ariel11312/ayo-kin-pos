@@ -8,6 +8,7 @@ import { ErrBox, OkBox } from "../../function/messageBox";
 import { getEmployees, addEmployee, updateEmployee } from "../data/employee";
 import { getTimeLogs } from "../data/timelogs";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import SalaryTab from "./SalaryTab"; // adjust path if you place SalaryTab elsewhere
 
 // ── Config ──
 const SHIFT_START = "10:00";         // HH:MM — anyone clocking in after this + grace is "Late"
@@ -68,7 +69,7 @@ function isLate(log, allLogsForDay) {
 
 /**
  * Pair Time In/Out per employee per day → array of sessions
- * { employee_id, date, in, out, hours }
+ * { employee_id, date (YYYY-MM-DD), in, out, hours }
  */
 function buildSessions(logs) {
   const byEmp = {};
@@ -78,25 +79,26 @@ function buildSessions(logs) {
   }
   const sessions = [];
   for (const k of Object.keys(byEmp)) {
+    const day = k.split("|")[1]; // plain YYYY-MM-DD (previously the full "id|date" key was used by mistake)
     const rows = byEmp[k].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     let openIn = null;
     for (const r of rows) {
       if (r.type === "in") {
         if (openIn) {
           // two "in"s in a row → treat previous as 0-hour session
-          sessions.push({ employee_id: r.employee_id, date: k, in: openIn, out: null, hours: 0 });
+          sessions.push({ employee_id: r.employee_id, date: day, in: openIn, out: null, hours: 0 });
         }
         openIn = r;
       } else if (r.type === "out" && openIn) {
         const hrs = (new Date(r.timestamp) - new Date(openIn.timestamp)) / 36e5;
-        sessions.push({ employee_id: r.employee_id, date: k, in: openIn, out: r, hours: hrs > 0 ? hrs : 0 });
+        sessions.push({ employee_id: r.employee_id, date: day, in: openIn, out: r, hours: hrs > 0 ? hrs : 0 });
         openIn = null;
       }
     }
     if (openIn) {
       // still clocked in → count hours up to now
       const hrs = (Date.now() - new Date(openIn.timestamp)) / 36e5;
-      sessions.push({ employee_id: openIn.employee_id, date: k, in: openIn, out: null, hours: hrs > 0 ? hrs : 0 });
+      sessions.push({ employee_id: openIn.employee_id, date: day, in: openIn, out: null, hours: hrs > 0 ? hrs : 0 });
     }
   }
   return sessions;
@@ -221,7 +223,7 @@ export default function EmployeeTimeView({ demoMode }) {
   const [modal, setModal] = useState(null); // "employee" | "history"
   const [editing, setEditing] = useState(null);
   const [historyEmp, setHistoryEmp] = useState(null);
-  const [form, setForm] = useState({ name: "", position: "", code: "", active: true });
+  const [form, setForm] = useState({ name: "", position: "", code: "", daily_rate: "", active: true });
 
   const [popup, setPopup] = useState(null);
 
@@ -388,25 +390,34 @@ export default function EmployeeTimeView({ demoMode }) {
   // ── Employee CRUD ──
   function openAddEmployee() {
     setEditing(null);
-    setForm({ name: "", position: "", code: genCode(), active: true });
+    setForm({ name: "", position: "", code: genCode(), daily_rate: "", active: true });
     setError("");
     setModal("employee");
   }
   function openEditEmployee(emp) {
     setEditing(emp);
-    setForm({ name: emp.name, position: emp.position || "", code: emp.code, active: emp.active });
+    setForm({
+      name: emp.name,
+      position: emp.position || "",
+      code: emp.code,
+      daily_rate: emp.daily_rate ?? "",
+      active: emp.active,
+    });
     setError("");
     setModal("employee");
   }
   async function saveEmployee() {
     if (!form.name.trim()) { setError("Name is required"); return; }
     if (!form.code.trim()) { setError("Employee code is required"); return; }
+    const rate = Number(form.daily_rate);
+    if (form.daily_rate !== "" && (!isFinite(rate) || rate < 0)) { setError("Daily rate must be a positive number"); return; }
+    const payload = { ...form, daily_rate: form.daily_rate === "" ? 0 : rate };
     try {
       if (editing) {
-        const updated = await updateEmployee(editing.id, form);
+        const updated = await updateEmployee(editing.id, payload);
         setEmployees(prev => prev.map(e => (e.id === editing.id ? updated : e)));
       } else {
-        const created = await addEmployee(form);
+        const created = await addEmployee(payload);
         setEmployees(prev => [...prev, created]);
       }
       setModal(null);
@@ -431,6 +442,7 @@ export default function EmployeeTimeView({ demoMode }) {
     { key: "employees", label: "Employees" },
     { key: "logs", label: "Time Logs" },
     { key: "hours", label: "Hours" },
+    { key: "salary", label: "Salary" },
   ];
 
   const cardStyle = {
@@ -794,6 +806,21 @@ export default function EmployeeTimeView({ demoMode }) {
         </div>
       )}
 
+      {/* ── SALARY ── */}
+      {tab === "salary" && (
+        <SalaryTab
+          employees={employees}
+          sessions={sessions}
+          logs={logs}
+          isMobile={isMobile}
+          shiftStart={SHIFT_START}
+          lateGraceMin={LATE_GRACE_MIN}
+          expectedHours={stats.expectedHours}
+          onSaved={refresh}
+          onExport={downloadCSV}
+        />
+      )}
+
       {/* ── EMPLOYEE MODAL ── */}
       {modal === "employee" && (
         <Modal title={editing ? "Edit Employee" : "Add Employee"} onClose={() => setModal(null)}>
@@ -803,6 +830,14 @@ export default function EmployeeTimeView({ demoMode }) {
             </Field>
             <Field label="Position">
               <input value={form.position} onChange={e => setForm(f => ({ ...f, position: e.target.value }))} placeholder="e.g. Attendant" style={inputStyle} />
+            </Field>
+            <Field label="Daily Rate (₱)">
+              <input
+                type="number" min="0" step="0.01" inputMode="decimal"
+                value={form.daily_rate}
+                onChange={e => setForm(f => ({ ...f, daily_rate: e.target.value }))}
+                placeholder="e.g. 610" style={inputStyle}
+              />
             </Field>
             <Field label="Employee Code">
               <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 8 }}>
